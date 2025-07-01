@@ -11,22 +11,21 @@ class ADNIDataset(Dataset):
         self.data = pd.read_csv(csv_file)
         self.transform = transform
 
-        # Use numeric labels from the CSV (already 1.0, 2.0, 3.0)
         self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
-        self.data['label'] = self.data['diagnosis'].astype(int) - 1  # Map 1→0 (CN), 2→1 (MCI), 3→2 (AD)
+        self.data['label'] = self.data['diagnosis'].astype(int) - 1
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
-        img = nib.load(row['filepath']).get_fdata().astype(np.float32)
+        img = np.load(row['npy_path']).astype(np.float32)
 
-        # Normalize the image
-        img = (img - np.mean(img)) / (np.std(img) + 1e-8)
-        img = np.expand_dims(img, axis=0)  # Add channel dim
+        # Already normalized, but add channel dim
+        img = np.expand_dims(img, axis=0)
 
         if self.transform:
             img = self.transform(img)
 
         return torch.tensor(img), torch.tensor(row['label'])
+
