@@ -1,0 +1,22 @@
+model:
+  name: 3dcnn
+  depth: 2
+  activation:
+  pool:
+  norm:
+  kernel_size:
+  dropout:
+  num_classes: 3
+  in_channels: 1,
+  num_classes: 3,
+  init_filters: 4
+
+training:
+  lr: 1e-4
+  batch_size: 32
+  epochs: 100
+
+validation:
+  folds: 5
+
+# separate train, validation, test
