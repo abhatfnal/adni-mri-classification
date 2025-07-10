@@ -13,8 +13,8 @@ df_meta.dropna(subset=['EXAMDATE'], inplace=True)
 # Prepare list for matches
 entries = []
 
-# Scan all .nii files
-root = '/project/aereditato/abhat/ADNI/ADNI'
+# Root directory containing merged unzipped 3T data
+root = '/project/aereditato/abhat/ADNI/3T_Datasets/ADNI/merged_unzipped/ADNI'
 subjects = [os.path.join(root, s) for s in os.listdir(root) if os.path.isdir(os.path.join(root, s))]
 
 for subj_path in subjects:
@@ -24,23 +24,24 @@ for subj_path in subjects:
     except ValueError:
         continue
 
-    # Get only rows with this RID
-    df_subj = df_meta[df_meta['RID'] == rid]
+    # Filter metadata for this RID
+    df_subj = df_meta[df_meta['RID'] == rid].copy()
 
     for root_dir, dirs, files in os.walk(subj_path):
         for file in files:
             if file.endswith('.nii'):
                 full_path = os.path.join(root_dir, file)
 
-                # Extract scan date from path (e.g., '2006-12-18_09_11_48.0')
+                # Extract scan date from folder structure (e.g., '2006-12-18_09_11_48.0')
                 try:
-                    date_str = full_path.split('/')[-3].split('_')[0]  # YYYY-MM-DD
+                    scan_folder = full_path.split('/')[-3]  # folder name before Ixxxx
+                    date_str = scan_folder.split('_')[0]
                     scan_date = datetime.strptime(date_str, '%Y-%m-%d')
-                except Exception as e:
+                except Exception:
                     continue
 
-                # Match closest exam date (allow ±30 day tolerance)
-                df_subj.loc[:, 'days_diff'] = abs((df_subj['EXAMDATE'] - scan_date).dt.days)
+                # Match closest exam date (±30 days tolerance)
+                df_subj['days_diff'] = abs((df_subj['EXAMDATE'] - scan_date).dt.days)
                 match = df_subj[df_subj['days_diff'] <= 30]
 
                 if not match.empty:
@@ -56,4 +57,4 @@ for subj_path in subjects:
 df_out = pd.DataFrame(entries)
 df_out.to_csv('adni_matched_nii_with_labels.csv', index=False)
 
-print(f" Done. Matched {len(df_out)} MRI scans with diagnosis labels.")
+print(f"✅ Done. Matched {len(df_out)} MRI scans with diagnosis labels.")
