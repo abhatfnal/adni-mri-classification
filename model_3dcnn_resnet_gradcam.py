@@ -1,183 +1,194 @@
-# model_3dcnn_resnet_gradcam.py
-
+#!/usr/bin/env python3
 import os
 import csv
+from collections import deque
+
 import torch
 import torch.nn as nn
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import pandas as pd
 
-from adni_dataset import ADNIDataset
+import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
-# === 3D Residual Block ===
-class ResidualBlock3D(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=(1,1,1)):
-        super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, out_channels,
-                               kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1   = nn.BatchNorm3d(out_channels)
-        self.conv2 = nn.Conv3d(out_channels, out_channels,
-                               kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2   = nn.BatchNorm3d(out_channels)
+import torchvision
 
-        # if we change channels or spatial size, use a 1×1×1 projection
-        if stride != (1,1,1) or in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.Conv3d(in_channels, out_channels,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm3d(out_channels),
-            )
-        else:
-            self.shortcut = nn.Identity()
+from adni_dataset import ADNIDataset
 
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += self.shortcut(x)
-        return F.relu(out)
+# --------------------------------------------
+# 1) Define your GradCAM‐compatible 3D ResNet
+# --------------------------------------------
+def _hook_fn(module, input, output):
+    model.feature_maps = output
 
-
-# === ResNet-style 3D CNN ===
-class ResNet3D(nn.Module):
-    def __init__(self, in_channels=1, num_classes=3):
-        super().__init__()
-        # Initial conv
-        self.stem = nn.Sequential(
-            nn.Conv3d(in_channels, 16, kernel_size=7, stride=(1,2,2), padding=(3,3,3), bias=False),
-            nn.BatchNorm3d(16),
-            nn.ReLU(inplace=True),
-        )
-        # Residual layers
-        # layer1: keep depth, downsample H/W by 2
-        self.layer1 = ResidualBlock3D(16, 32, stride=(1,2,2))
-        # layer2: keep depth, downsample H/W by 2
-        self.layer2 = ResidualBlock3D(32, 64, stride=(1,2,2))
-        # layer3: now downsample all dims
-        self.layer3 = ResidualBlock3D(64, 128, stride=(2,2,2))
-
-        # global pooling + classifier
-        self.avgpool = nn.AdaptiveAvgPool3d((1,1,1))
-        self.fc      = nn.Linear(128, num_classes)
-
-    def forward(self, x):
-        x = self.stem(x)        # shape → [B,16, D, H/2, W/2]
-        x = self.layer1(x)      # → [B,32, D, H/4, W/4]
-        x = self.layer2(x)      # → [B,64, D, H/8, W/8]
-        x = self.layer3(x)      # → [B,128, D/2, H/16, W/16]
-        x = self.avgpool(x)     # → [B,128,1,1,1]
-        x = x.view(x.size(0), -1)
-        return self.fc(x)       # → [B,num_classes]
-
-
-# === Grad-CAM wrapper ===
-class GradCAMResNet3D(ResNet3D):
+class GradCAMResNet3D(nn.Module):
     def __init__(self, num_classes=3):
-        super().__init__(in_channels=1, num_classes=num_classes)
+        super().__init__()
+
+        # load a small 3D ResNet backbone
+        self.backbone = torchvision.models.video.r3d_18(pretrained=False)
+        # adapt first conv to 1 channel instead of 3
+        self.backbone.stem[0] = nn.Conv3d(
+            in_channels=1,
+            out_channels=64,
+            kernel_size=(3,7,7),
+            stride=(1,2,2),
+            padding=(1,3,3),
+            bias=False
+        )
+        # remove its final fc
+        self.backbone.fc = nn.Identity()
+
+        # register a hook on the last conv-block for GradCAM
         self.feature_maps = None
+        self.backbone.layer4.register_forward_hook(_hook_fn)
 
-        def hook_fn(module, _in, out):
-            self.feature_maps = out
-            if out.requires_grad:
-                out.retain_grad()
+        # a little dropout + your final classifier
+        self.dropout = nn.Dropout(0.5)
+        self.classifier = nn.Linear(512, num_classes)
 
-        # hook on the end of layer2 (64 channels at 32×32×32)
-        self.layer2.register_forward_hook(hook_fn)
+    def forward(self, x):
+        # x: [B,1,D,H,W]
+        features = self.backbone(x)            # [B,512]
+        out = self.dropout(features)          # [B,512]
+        out = self.classifier(out)            # [B,num_classes]
+        return out
 
-
-# === Training script ===
+# --------------------------------------------
+# 2) Training script with smoothing & reg
+# --------------------------------------------
 def train_model():
-    csv_file = 'adni_preprocessed_npy_metadata.csv'
-    batch_size = 32
-    epochs = 500
-    lr = 1e-5
-    patience = 30
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # — config —
+    csv_file   = "adni_preprocessed_npy_metadata.csv"
+    batch_size = 8
+    epochs     = 500
+    lr         = 1e-5
+    patience   = 30
+    device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # data + stratified split
-    full_dataset = ADNIDataset(csv_file, augment=True)
+    # — build dataset & split —
     df = pd.read_csv(csv_file)
-    labels = df['diagnosis'].astype(int).tolist()
+    labels = df["diagnosis"].astype(int).tolist()
+
+    full_ds = ADNIDataset(csv_file, augment=True)
     train_idx, val_idx = train_test_split(
-        list(range(len(full_dataset))),
+        list(range(len(full_ds))),
         test_size=0.2,
         stratify=labels,
         random_state=42
     )
-    train_loader = DataLoader(torch.utils.data.Subset(full_dataset, train_idx),
-                              batch_size=batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(torch.utils.data.Subset(ADNIDataset(csv_file, augment=False), val_idx),
-                            batch_size=batch_size, shuffle=False, num_workers=4)
+    train_ds = torch.utils.data.Subset(full_ds, train_idx)
+    val_ds   = torch.utils.data.Subset(full_ds, val_idx)
 
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=4)
+    val_loader   = DataLoader(val_ds,   batch_size=batch_size*2, shuffle=False, num_workers=4)
+
+    # — model, loss, optimizer, scheduler —
+    global model
     model = GradCAMResNet3D(num_classes=3).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # CSV logging
-    log_file = "training_log_resnet_gradcam.csv"
-    with open(log_file,'w',newline='') as f:
-        csv.writer(f).writerow(["epoch","train_loss","val_loss"])
+    # class‐balanced weights
+    counts = df["diagnosis"].value_counts().sort_index().values
+    weights = 1.0 / torch.tensor(counts, dtype=torch.float)
+    weights = (weights / weights.sum() * len(weights)).to(device)
+    criterion = nn.CrossEntropyLoss(weight=weights)
 
-    best_val = float('inf')
-    patience_ctr = 0
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=lr,
+        weight_decay=1e-4
+    )
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=5
+    )
 
+    # — setup logging & smoothing buffer —
+    log_file = "training_log_resnet_gradcam_2.csv"
+    with open(log_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["epoch","train_loss","val_loss","smooth_val_loss"])
+
+    best_val = float("inf")
+    val_queue = deque(maxlen=5)
+    epochs_no_improve = 0
+
+    # — training loop —
     for epoch in range(1, epochs+1):
-        # — train —
         model.train()
-        tloss = 0
+        train_loss = 0.0
         for X,y in train_loader:
             X,y = X.to(device), y.to(device)
             optimizer.zero_grad()
             out = model(X)
             loss = criterion(out,y)
             loss.backward()
+            # clip to avoid spikes
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0)
             optimizer.step()
-            tloss += loss.item()
-        tloss /= len(train_loader)
+            train_loss += loss.item()
+        train_loss /= len(train_loader)
 
-        # — val —
+        # — validation —
         model.eval()
-        vloss = 0
+        val_loss = 0.0
         with torch.no_grad():
             for X,y in val_loader:
                 X,y = X.to(device), y.to(device)
-                out = model(X)
-                vloss += criterion(out,y).item()
-        vloss /= len(val_loader)
+                val_loss += criterion(model(X), y).item()
+        val_loss /= len(val_loader)
 
-        # log
-        with open(log_file,'a',newline='') as f:
-            csv.writer(f).writerow([epoch, tloss, vloss])
-        print(f"Epoch {epoch}/{epochs} | Train: {tloss:.4f}  Val: {vloss:.4f}")
+        # — smooth & log —
+        val_queue.append(val_loss)
+        smooth_val = sum(val_queue) / len(val_queue)
 
-        # checkpoint
-        if vloss < best_val:
-            best_val = vloss
-            torch.save(model.state_dict(), "best_resnet3d_gradcam.pth")
-            patience_ctr = 0
-            print("  ✅ saved best model")
+        with open(log_file, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch, f"{train_loss:.4f}", f"{val_loss:.4f}", f"{smooth_val:.4f}"])
+
+        print(f"[{epoch:03d}/{epochs}]  Train: {train_loss:.4f}  Val: {val_loss:.4f}  Smooth: {smooth_val:.4f}")
+
+        # — checkpoint on smoothed loss —
+        if smooth_val < best_val:
+            best_val = smooth_val
+            torch.save(model.state_dict(), "best_resnet_gradcam_2.pth")
+            epochs_no_improve = 0
+            print("    ✅ saved best model")
         else:
-            patience_ctr += 1
-            if patience_ctr >= patience:
-                print("  ⏹️ early stopping")
-                break
+            epochs_no_improve += 1
 
-    # final metrics
-    model.load_state_dict(torch.load("best_resnet3d_gradcam.pth"))
+        # — step scheduler —
+        scheduler.step(smooth_val)
+        
+        # print the current LR(s):
+        lrs = [group['lr'] for group in optimizer.param_groups]
+        print(f"    LR now: {[f'{lr:.2e}' for lr in lrs]}")
+
+        if epochs_no_improve >= patience:
+            print(f"    ⏹️ early stopping @ epoch {epoch}")
+            break
+
+    # — final evaluation report —
+    model.load_state_dict(torch.load("best_resnet_gradcam_2.pth", map_location=device))
     model.eval()
     y_true, y_pred = [], []
     with torch.no_grad():
         for X,y in val_loader:
             X,y = X.to(device), y.to(device)
-            preds = model(X).argmax(dim=1).cpu().tolist()
+            out = model(X)
+            preds = out.argmax(dim=1)
             y_true.extend(y.cpu().tolist())
-            y_pred.extend(preds)
-    names = {0:"MCI",1:"AD",2:"CN"}
-    print(classification_report(y_true,y_pred,
-                                target_names=[names[i] for i in sorted(set(y_true))]))
+            y_pred.extend(preds.cpu().tolist())
 
+    print("\n" + classification_report(
+        y_true, y_pred,
+        target_names=["MCI","AD","CN"]
+    ))
 
 if __name__ == "__main__":
     train_model()

@@ -16,7 +16,8 @@ class Simple3DCNN(nn.Module):
 
         self.conv3 = nn.Conv3d(16, 32, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm3d(32)
-        self.pool3 = nn.MaxPool3d(2)
+        # self.pool3 = nn.MaxPool3d(2)
+        self.pool3 = nn.MaxPool3d(kernel_size=(1,2,2))
 
         self.fc1 = nn.Linear(32 * 16 * 16 * 16, 128)
         self.dropout = nn.Dropout(0.5)

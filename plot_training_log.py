@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Load CSV
-log_file = 'training_log.csv'
+log_file = 'training_log_resnet_gradcam_2.csv'
 df = pd.read_csv(log_file)
 
 # Plot
@@ -17,7 +17,7 @@ plt.grid(True)
 plt.tight_layout()
 
 # Save plot
-plt.savefig('loss_plot.png', dpi=300)
+plt.savefig('loss_plot_resnet_gradcam_2.png', dpi=300)
 print("✅ Plot saved as loss_plot.png")
 
 # Optional: Show plot (uncomment if running interactively)
