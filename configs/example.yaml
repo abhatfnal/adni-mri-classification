@@ -10,12 +10,11 @@ model:
   num_classes:
 
 training:
-  lr:
   batch_size:
   epochs:
   optimizer:
-    name: 
-    params:
+    name:
+    lr:
     weight_decay:
 
 validation:

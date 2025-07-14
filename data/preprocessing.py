@@ -137,6 +137,7 @@ def preprocess_and_save(i, rid, nii_path, scan_date, output_shape, output_dir):
 
         # z-score normalization
         data = registration.get_fdata().astype(np.float32)
+        
         m, s = data.mean(), data.std()
         data = (data - m) / s if s > 0 else (data - m)
 

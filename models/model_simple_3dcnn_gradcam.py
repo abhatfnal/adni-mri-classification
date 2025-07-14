@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .model_3dcnn import Simple3DCNN
+from .model_simple_3dcnn import Simple3DCNN
 
 class GradCAM3DCNN(Simple3DCNN):
     

@@ -1,0 +1,28 @@
+model:
+  name: custom_3dcnn
+  depth: 4
+  activation:
+  pool:
+  norm:
+  kernel_size: 3
+  dropout: 0.45
+  num_classes: 3
+  in_channels: 1
+  init_filters: 16
+  classifier_width: 128
+
+training:
+  batch_size: 32
+  epochs: 100
+  optimizer:
+    name: 'adam'
+    lr: 5e-4
+    weight_decay: 1e-3
+
+data:
+  augmentation: true
+
+validation:
+  folds: 5
+
+# separate train, validation, test

@@ -1,0 +1,24 @@
+model:
+  name: resnet18
+  num_classes: 3
+  in_channels: 1
+  init_filters: 4
+
+training:
+  batch_size: 8
+  epochs: 1000
+  optimizer:
+    name: 'adam'
+    lr: 1e-3
+  scheduler:
+    name: 'CosineAnnealingLR'
+    lr_min: 2e-6
+    t_max: 100
+
+data:
+  augmentation: true
+
+validation:
+  folds: 5
+
+# separate train, validation, test

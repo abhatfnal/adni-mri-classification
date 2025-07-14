@@ -1,0 +1,29 @@
+model:
+  name: simple_3dcnn
+  depth: 
+  activation:
+  pool:
+  norm:
+  kernel_size:
+  dropout: 0.2
+  num_classes: 3
+  in_channels: 1
+  init_filters: 8
+
+training:
+  batch_size: 32
+  epochs: 500
+  optimizer:
+    name: 'adam'
+    weight_decay: 1e-4
+    lr: 1e-3
+  scheduler:
+    name: 'CosineAnnealingLR'
+    t_max: 50
+
+validation:
+  folds: 5
+
+data:
+  augmentation: true
+
