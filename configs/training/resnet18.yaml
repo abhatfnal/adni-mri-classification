@@ -6,18 +6,18 @@ model:
 
 training:
   batch_size: 8
-  epochs: 1000
+  epochs: 200
   optimizer:
     name: 'adam'
     lr: 1e-3
   scheduler:
     name: 'CosineAnnealingLR'
     lr_min: 2e-6
-    t_max: 100
+    t_max: 200
 
 data:
   augmentation: true
-
+  
 validation:
   folds: 5
 

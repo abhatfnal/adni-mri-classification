@@ -1,4 +1,5 @@
 import torch
+import math
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -117,7 +118,7 @@ class ResNet18(BaseModel):
         # Configuration
         num_classes  = int(self.cfg.get('num_classes', 3))
         initial_filters = int(self.cfg.get('init_filters', 8))
-        input_shape  = tuple(self.cfg.get('input_shape', (128, 128, 128)))
+        input_shape  = tuple(self.cfg.get('input_shape', (1, 128, 128, 128))) # (C, D, H, W)
         
         avgpool_kernel_size = 2
         
@@ -126,29 +127,28 @@ class ResNet18(BaseModel):
             nn.Conv3d(1, initial_filters, 7, padding=7//2),
             nn.BatchNorm3d(initial_filters),
             nn.ReLU()
-        )   # (4, 128, 128, 128)
+        )   # (inital_filters, D, H, W)
         
         # pooling
-        self.pool1 = nn.MaxPool3d(2)                # (4, 64, 64, 64)
+        self.pool1 = nn.MaxPool3d(2)                # (initial_filters, floor(D/2), floor(H/2), floor(W/2))
         
         # basic block 1
-        self.bb_1 = BasicBlock1(initial_filters)    # (4, 64, 64, 64)
+        self.bb_1 = BasicBlock1(initial_filters)    # shape unchanged
         
         # basic blocks 2 - 4
-        self.bb_2 = BasicBlock2(initial_filters)    # (8, 32, 32, 32)
-        self.bb_3 = BasicBlock2(initial_filters*2)  # (16, 16, 16, 16)
-        self.bb_4 = BasicBlock2(initial_filters*4)  # (32, 8, 8, 8)
-        
+        self.bb_2 = BasicBlock2(initial_filters)    # (initial_filters*2, floor(D/4), floor(H/4), floor(W/4))
+        self.bb_3 = BasicBlock2(initial_filters*2)  # (initial_filters*4, floor(D/8), floor(H/8), floor(W/8))
+        self.bb_4 = BasicBlock2(initial_filters*4)  # (initial_filters*8), floor(D/16), floor(H/16), floor(W/16))
+
         # batch norm
         self.norm = nn.BatchNorm3d(initial_filters*8)
         
         # avg pool
-        self.avgpool = nn.AvgPool3d(avgpool_kernel_size)
+        self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: (initial_filters*8, floor(D/32), floor(H/32), floor(W/32))
         
-        # out: (32, 4, 4, 4)
         
-        # final fc layer
-        self.fc = nn.Linear(initial_filters*8*4*4*4, num_classes)
+        # final fc layer (hardcoded dims)
+        self.fc1 = nn.Linear(384, num_classes)
         
     def forward(self, x):
         
@@ -163,17 +163,12 @@ class ResNet18(BaseModel):
         
         x = x.view(x.size(0), -1)
         
-        return self.fc(x)
+        return self.fc1(x)
     
 if __name__ == "__main__":
     
-    sam = SAM3d()
-    x = torch.randn(1,5,128,128,128)
-    out = sam(x)
+    model = ResNet18({})
+    print(model)
+    sample = torch.randn(1, 1, 79, 95, 79)
+    out = model(sample)
     print(out.shape)
-    
-    # model = ResNet18({})
-    # print(model)
-    # sample = torch.randn(1, 1, 128, 128, 128)
-    # out = model(sample)
-    # print(out.shape)  # Should be [1, 3] for 3 classes (CN, MCI, AD)

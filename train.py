@@ -3,20 +3,23 @@ import yaml
 import datetime
 import argparse
 
+from omegaconf import OmegaConf
+from configs import schema
 
 def train_and_evaluate(cfg_path, exp_dir=None):
-    import pandas as pd
+
     import torch
     import torch.nn as nn
+    import pandas as pd
     import matplotlib.pyplot as plt
-
+    
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import classification_report, confusion_matrix
     from models.registry import get_model
     from data.datasets import ADNIDataset
     from torch.utils.data import Subset, DataLoader
     from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
-    from data.augmentation import augmentation_transform
+    from data.augmentation import random_crop, build_augmentation
 
     # Device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -24,7 +27,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     # Empty cache
     torch.cuda.empty_cache()
     
-    # Load config
+    #===|| Load configurations ||===
+    
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
     
@@ -32,7 +36,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     model_cfg = dict(cfg.get('model', {}))
     model_name = str(model_cfg.get('name', 'simple_3dcnn'))
     
-    # Train config
+    # Training config
     train_cfg = dict(cfg.get('training', {}))
     
     epochs = int(train_cfg.get('epochs', 50))
@@ -42,13 +46,14 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     optim_cfg = dict(train_cfg.get('optimizer', {}))
     
     optim_name = str(optim_cfg.get('name', 'adam'))
-    lr = float(optim_cfg.get('lr', 1e-5))
     weight_decay = float(optim_cfg.get('weight_decay', 0))
+    lr = float(optim_cfg.get('lr', 1e-5))
     
     # LR scheduler config 
     use_scheduler = 'scheduler' in train_cfg
     
     scheduler_cfg = dict(train_cfg.get('scheduler',{}))
+    
     scheduler_name = str(scheduler_cfg.get('name','CosineAnnealingLR'))
     scheduler_t_max = int(scheduler_cfg.get('t_max',200))
     scheduler_lr_min = float(scheduler_cfg.get('lr_min',1e-6))
@@ -57,24 +62,19 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     # Data config
     data_cfg = dict(cfg.get('data',{}))
     
-    augmentation = bool(data_cfg.get('augmentation', False))
-
-    # Setup experiment directory once
-    if exp_dir is None:
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        exp_name = f"{cfg['model']['name']}_{timestamp}"
-        exp_dir = os.path.join('./experiments', exp_name)
-    os.makedirs(exp_dir, exist_ok=True)
-
-    # Save a copy of the config for reproducibility
-    with open(os.path.join(exp_dir, 'config.yaml'), 'w') as f:
-        yaml.dump(cfg, f)
-
-    print(f"Batch size: {batch_size}, Learning rate: {lr}, Epochs: {epochs}")
+    use_augmentation = 'augmentation' in data_cfg
+    augmentation_cfg = data_cfg.get('augmentation',{})
     
+    # Path to csv file of dataset
+    dataset_csv = './data/preprocessing_dicom/data/labels.csv'
+    
+    # If enabled, build augmentation transform
+    if(use_augmentation):
+        augmentation_transform = random_crop
+        augmented_dataset = ADNIDataset(dataset_csv, transform=augmentation_transform)   # for training
+        
     # Prepare datasets
-    full_dataset = ADNIDataset()                                        # for validation
-    augmented_dataset = ADNIDataset(transform=augmentation_transform)   # for training
+    full_dataset = ADNIDataset(dataset_csv)                                        # for validation
     
     print(f"Total samples in dataset: {len(full_dataset)}")
     
@@ -88,6 +88,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         random_state=42
     )
 
+    print(f"Batch size: {batch_size}, Learning rate: {lr}, Epochs: {epochs}")
+    
     # Second: train vs val split (from trainval)
     train_labels = [labels[i] for i in trainval_idx]
     train_idx, val_idx = train_test_split(
@@ -97,7 +99,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         random_state=42
     )
     
-    if augmentation:
+    if use_augmentation:
         train_dataset = Subset(augmented_dataset, train_idx)
     else:
         train_dataset = Subset(full_dataset, train_idx)
@@ -133,14 +135,15 @@ def train_and_evaluate(cfg_path, exp_dir=None):
                 pct_start=0.1, anneal_strategy='linear'
             )
 
-    # Log model, optimizer and dataset option to ensure it's what we wanted to train
+    # Log model, optimizer and dataset option to ensure it's what we want to train
     print(model)
     print(optimizer)
     
     if(use_scheduler):
         print(scheduler)
         
-    print(f"Dataset augmentation: {augmentation}")
+    print(f"Dataset augmentation: {use_augmentation}")
+    print(f"Transform: {cfg['data']['augmentation']}")
     
     # Real-time CSV logging setup
     csv_path = os.path.join(exp_dir, 'losses.csv')
@@ -236,23 +239,17 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     print(pd.DataFrame(confusion_matrix(all_lbls, all_preds)))
 
 
-def submit_slurm(config_path):
-    # Load config for naming
-    with open(config_path, 'r') as f:
-        cfg = yaml.safe_load(f)
-    # Experiment folder naming
-    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    exp_name = f"{cfg['model']['name']}_{ts}"
-    exp_dir = os.path.join('experiments', exp_name)
-    os.makedirs(exp_dir, exist_ok=True)
+def submit_slurm(config_path, dir_path):
 
-    job_name = exp_name
-    slurm_path = os.path.join(exp_dir, f"{job_name}.slurm")
+    job_name = os.path.basename(os.path.normpath(dir_path))
+    slurm_path = os.path.join(dir_path, f"{job_name}.slurm")
+    
+    log_out = os.path.join(dir_path, f"{job_name}_%j.out")
+    log_err = os.path.join(dir_path, f"{job_name}_%j.err")
+    
+    # Absolute paths to this script & the merged config
     abs_train = os.path.abspath(__file__)
-    abs_cfg = os.path.abspath(config_path)
-
-    log_out = os.path.join(exp_dir, f"{job_name}_%j.out")
-    log_err = os.path.join(exp_dir, f"{job_name}_%j.err")
+    abs_cfg   = os.path.abspath(config_path)
 
     content = f"""#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -278,7 +275,7 @@ echo "Starting job at $(date)"
 cd /project/aereditato/cestari/adni-mri-classification
 
 # Run training using the same experiment directory
-python {abs_train} {abs_cfg} --exp_dir {exp_dir}
+python {abs_train} --config {abs_cfg} --dir {exp_dir}
 
 echo "Finished at $(date)"""  
 
@@ -289,14 +286,68 @@ echo "Finished at $(date)"""
 
 
 if __name__ == '__main__':
+    
     parser = argparse.ArgumentParser(description='Train or submit as Slurm job')
-    parser.add_argument('config_file', help='Path to config YAML')
-    parser.add_argument('--job', action='store_true', help='Submit via Slurm')
-    parser.add_argument('--exp_dir', default=None,
-                        help='Experiment directory')
+    
+    parser.add_argument(
+        "-c", "--config",
+        action="append",
+        required=True,
+        help="One or more YAML config files (you can repeat -c for each)"
+    )
+
+    parser.add_argument(
+        '--job',
+        action='store_true',
+        help='Submit via Slurm'
+    )
+
+    parser.add_argument(
+        '--dir',
+        default=None,
+        help='Experiment directory'
+    )
+
+    # now each override is explicit, not positional, and can be repeated
+    parser.add_argument(
+        "-o", "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Config override in dot-list form, e.g. -o training.batch_size=16"
+    )
+
     args = parser.parse_args()
 
-    if args.job:
-        submit_slurm(args.config_file)
+    # Load and merge all YAML configs
+    try:
+        cfg = OmegaConf.merge(*[OmegaConf.load(path) for path in args.config])
+    except Exception as e:
+        print(f"Error: {e}")
+        exit(-1)
+
+    # Apply any CLI overrides (e.g. training.batch_size=16)
+    if args.override:
+        cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.override))
+        
+    # Check if model name is specified
+    assert 'name' in cfg.model, "Error: model name is not specified"
+    
+    # Create directory
+    exp_dir = args.dir
+    
+    if exp_dir is None:
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        exp_name = f"{cfg.model.name}_{timestamp}"
+        exp_dir = os.path.join('./experiments', exp_name)
+    os.makedirs(exp_dir, exist_ok=True)
+    
+    # Dump all configs to file
+    config_path = os.path.join(exp_dir,"config.yaml")
+    OmegaConf.save(cfg, config_path)
+    
+    # Dispatch
+    if args.job: 
+        submit_slurm(config_path=config_path, dir_path=exp_dir)
     else:
-        train_and_evaluate(args.config_file, args.exp_dir)
+        train_and_evaluate(cfg_path=config_path, exp_dir=exp_dir)

@@ -15,9 +15,18 @@ __pycache__/
 *.nii.gz
 *.pth
 *.npy
+*.out
+*.err
 
 # Experiments
 experiments/*
+
+# Tests
+
+# Datasets
+*.dcm
+data/*/data/*
+data/raw
 
 # Jupyter
 .ipynb_checkpoints/
