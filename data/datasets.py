@@ -1,12 +1,9 @@
-import os
 import torch
-from torch.utils.data import Dataset, Subset
 import pandas as pd
 import nibabel as nib
 import numpy as np
 
-import pandas as pd
-from pathlib import Path
+from torch.utils.data import Dataset
 
 
 class ADNIDataset(Dataset):
@@ -35,23 +32,19 @@ class ADNIDataset(Dataset):
         if self.transform:
             img = self.transform(img)
         
-        # Replace Nans with global mean
+        # Replace nans with global mean
         # TODO: Think how to handle better
         mean = np.nanmean(img)
         img[np.isnan(img)] = mean
         
-        # Z-Score normalize
+        # Z-Score normalization
         if self.zscore_norm and img.std() != 0:
             img = (img - img.mean())/img.std()
         else:
             img = img.mean()
             
-        # already normalized in preprocessing, just add channel
+        # Add channel
         img = np.expand_dims(img, 0)  # [1,D,H,W]
-
-        # check for Nan
-        if np.any(np.isnan(img)):
-            print("Alarm: Nan in dataset!")
             
         return torch.from_numpy(img), torch.tensor(row['label'])
     

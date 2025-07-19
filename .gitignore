@@ -21,7 +21,6 @@ __pycache__/
 # Experiments
 experiments/*
 
-# Tests
 
 # Datasets
 *.dcm

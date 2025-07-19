@@ -25,5 +25,7 @@ validation:
   folds: 5
 
 data:
+  trainval_csv: ''      # trainval dataset .csv absolute path
+  test_csv: ''       # test dataset .csv absolute path
   augmentation: true
 

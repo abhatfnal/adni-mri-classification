@@ -1,5 +1,4 @@
 import torch
-import math
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -144,7 +143,7 @@ class ResNet18(BaseModel):
         self.norm = nn.BatchNorm3d(initial_filters*8)
         
         # avg pool
-        self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: (initial_filters*8, floor(D/32), floor(H/32), floor(W/32))
+        self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: ? (initial_filters*8, floor(D/32), floor(H/32), floor(W/32))
         
         
         # final fc layer (hardcoded dims)

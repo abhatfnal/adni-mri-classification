@@ -1,12 +1,12 @@
 """
-Compute ./data/labels.csv file.
+Compute ./data/datatset.csv file.
+Contains paths to scans and its respective diagnosis.
 """
 import os
 import re
 import sys
 import pandas as pd
 import argparse
-import zipfile
 
 from datetime import datetime
 
@@ -34,7 +34,7 @@ def parse_filename(filename):
 def compute_labels(diagnosis_file, img_dir):
     """
     Get list of (patient_id,date) then matches with temporally closest diagnosis and image absolute path.
-    Dumps data in img_dir/labels.csv.
+    Dumps data in img_dir/dataset.csv.
     """
     try:
 
@@ -91,7 +91,7 @@ def compute_labels(diagnosis_file, img_dir):
             
         # Save to CSV
         df_out = pd.DataFrame(entries)
-        df_out.to_csv(os.path.join(img_dir, 'labels.csv'), index=False)
+        df_out.to_csv(os.path.join(img_dir, 'dataset.csv'), index=False)
         
     except Exception as e:
         print(f"Error: {e}")
