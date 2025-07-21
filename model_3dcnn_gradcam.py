@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from model_3dcnn import Simple3DCNN
+from adni_dataset import ADNIDataset
 
 # --- GradCAM-Compatible Model ---
 class GradCAM3DCNN(Simple3DCNN):
@@ -10,12 +11,14 @@ class GradCAM3DCNN(Simple3DCNN):
         super().__init__(num_classes)
         self.feature_maps = None
 
-        def hook_fn(module, input, output):
+        def hook_fn(module, inputs, output):
             self.feature_maps = output
-            if self.feature_maps.requires_grad:
-                self.feature_maps.retain_grad()
+            if output.requires_grad:
+                output.retain_grad()
 
-        self.conv3.register_forward_hook(hook_fn)
+        # Hook conv2 instead of (or in addition to) conv3:
+        self.conv2.register_forward_hook(hook_fn)
+
 
 # --- Training Script ---
 def train_model():
@@ -47,8 +50,10 @@ def train_model():
         random_state=42
     )
 
-    train_dataset = torch.utils.data.Subset(full_dataset, train_idx)
-    val_dataset = torch.utils.data.Subset(full_dataset, val_idx)
+    # train_dataset = torch.utils.data.Subset(full_dataset, train_idx)
+    # val_dataset = torch.utils.data.Subset(full_dataset, val_idx)
+    train_dataset = ADNIDataset(csv_file, augment=True)
+    val_dataset   = ADNIDataset(csv_file, augment=False)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
