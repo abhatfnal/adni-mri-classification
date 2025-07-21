@@ -1,16 +1,26 @@
-# adni_dataset.py
-
 import torch
-from torch.utils.data import Dataset
+import pandas as pd
+import nibabel as nib
 import numpy as np
 import pandas as pd
 import torchio as tio
 
 
+from torch.utils.data import Dataset
+
 class ADNIDataset(Dataset):
-    def __init__(self, csv_file, augment=False):
+    """
+    ADNI dataset class
+    """
+        
+    def __init__(self, csv_file, transform=None, zscore_norm=True):
+        
         self.data = pd.read_csv(csv_file)
-        self.data = self.data[self.data['diagnosis'].isin([1.0,2.0,3.0])]
+        self.transform = transform
+        self.zscore_norm = zscore_norm
+
+        # Keep only relevant diagnoses and create labels
+        self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
         self.data['label'] = self.data['diagnosis'].astype(int) - 1
         self.augment = augment
 
@@ -28,16 +38,17 @@ class ADNIDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
+        
         row = self.data.iloc[idx]
-        img = np.load(row['npy_path']).astype(np.float32)  # [D,H,W]
+        img = nib.load(row['filepath']).get_fdata().astype(np.float32)
 
-        # wrap as TorchIO subject so we can apply 3D transforms
-        if self.transforms:
-            subject = tio.Subject(
-                mri=tio.ScalarImage(tensor=img[None]))
-            subject = self.transforms(subject)
-            img = subject.mri.data.squeeze(0).numpy()
-
-        # already normalized in preprocessing, just add channel
+        if self.transform:
+            img = self.transform(img)
+            
+        # Add channel
         img = np.expand_dims(img, 0)  # [1,D,H,W]
+            
         return torch.from_numpy(img), torch.tensor(row['label'])
+    
+    def labels(self):
+        return self.data['label'].astype(int).tolist()

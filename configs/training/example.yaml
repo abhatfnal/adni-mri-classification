@@ -1,0 +1,23 @@
+model:
+  name:
+  depth:
+  activation:
+  pool:
+  norm:
+  kernel_size:
+  initial_channels:
+  dropout:
+  num_classes:
+
+training:
+  batch_size:
+  epochs:
+  optimizer:
+    name:
+    lr:
+    weight_decay:
+
+validation:
+  folds: 5
+
+# separate train, validation, test

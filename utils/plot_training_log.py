@@ -1,8 +1,14 @@
 import pandas as pd
+import sys
 import matplotlib.pyplot as plt
 
 # Load CSV
-log_file = 'training_log_resnet_gradcam_2.csv'
+
+if len(sys.argv) <= 1:
+    print("Usage: python plot_training_log.py <path>")
+    exit()
+    
+log_file = sys.argv[1]
 df = pd.read_csv(log_file)
 
 # Plot

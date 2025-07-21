@@ -2,11 +2,26 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Simple3DCNN(nn.Module):
-    def __init__(self, in_channels=1, num_classes=3):
-        super().__init__()
-        self.conv1 = nn.Conv3d(in_channels,  8, 3, padding=1)
-        self.bn1   = nn.BatchNorm3d(8)
+from .base import BaseModel
+
+class Simple3DCNN(BaseModel):
+        
+
+    def _build(self):
+        
+        # Configuration
+        in_channels  = int(self.cfg.get('in_channels', 1))
+        num_classes  = int(self.cfg.get('num_classes', 3))
+        #depth        = int(self.cfg.get('depth', 3))
+        #init_filters = int(self.cfg.get('init_filters', 8))
+        #kernel_size = int(self.cfg.get('kernel_size', 3))
+        #input_shape  = tuple(self.cfg.get('input_shape', (128, 128, 128)))
+        #classifier_width = int(self.cfg.get('classifier_width', 128))
+        
+        dropout = float(self.cfg.get('dropout',0.5))
+        
+        self.conv1 = nn.Conv3d(in_channels=1, out_channels=8, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm3d(8)
         self.pool1 = nn.MaxPool3d(2)
         self.conv2 = nn.Conv3d(8, 16, 3, padding=1)
         self.bn2   = nn.BatchNorm3d(16)
@@ -23,9 +38,9 @@ class Simple3DCNN(nn.Module):
             x = self.pool3(F.relu(self.bn3(self.conv3(x))))
             self._to_linear = x.numel()  # 1 * C * D * H * W
 
-        self.fc1 = nn.Linear(self._to_linear, 128)
-        self.dropout = nn.Dropout(0.5)
-        self.fc2   = nn.Linear(128, num_classes)
+        self.fc1 = nn.Linear(32 * 16 * 16 * 16, 128)
+        self.dropout = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x):
         x = self.pool1(F.relu(self.bn1(self.conv1(x))))

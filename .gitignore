@@ -5,6 +5,7 @@ __pycache__/
 
 # Logs
 *.log
+*.csv
 
 # Output files
 *.pdf
@@ -13,6 +14,18 @@ __pycache__/
 *.nii
 *.nii.gz
 *.pth
+*.npy
+*.out
+*.err
+
+# Experiments
+experiments/*
+
+
+# Datasets
+*.dcm
+data/*/data/*
+data/raw
 
 # Jupyter
 .ipynb_checkpoints/
