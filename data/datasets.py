@@ -5,7 +5,6 @@ import numpy as np
 
 from torch.utils.data import Dataset
 
-
 class ADNIDataset(Dataset):
     """
     ADNI dataset class
@@ -31,17 +30,6 @@ class ADNIDataset(Dataset):
 
         if self.transform:
             img = self.transform(img)
-        
-        # Replace nans with global mean
-        # TODO: Think how to handle better
-        mean = np.nanmean(img)
-        img[np.isnan(img)] = mean
-        
-        # Z-Score normalization
-        if self.zscore_norm and img.std() != 0:
-            img = (img - img.mean())/img.std()
-        else:
-            img = img.mean()
             
         # Add channel
         img = np.expand_dims(img, 0)  # [1,D,H,W]

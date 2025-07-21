@@ -245,7 +245,7 @@ def submit_slurm(config_path, dir_path):
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=12:00:00
+#SBATCH --time=15:00:00
 #SBATCH --output={log_out}
 #SBATCH --error={log_err}
 #SBATCH --account=pi-aereditato
