@@ -46,8 +46,9 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     lr          = float(optim_cfg.get('lr', 1e-5))
     weight_decay= float(optim_cfg.get('weight_decay', 0))
 
-    use_scheduler     = 'scheduler' in cfg.training
     scheduler_cfg     = cfg.training.get('scheduler', {})
+    
+    use_scheduler = scheduler_cfg != {}
     scheduler_name    = scheduler_cfg.get('name', 'CosineAnnealingLR')
     scheduler_t_max   = int(scheduler_cfg.get('t_max', epochs))
     scheduler_lr_min  = float(scheduler_cfg.get('lr_min', 1e-6))
@@ -307,9 +308,14 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # Load default config
+    cfg = OmegaConf.load(DEFAULT_CONFIG_PATH)
+    
     # Load and merge all YAML configs
     try:
-        cfg = OmegaConf.merge(*[OmegaConf.load(path) for path in args.config])
+        for path in args.config:
+            cfg = OmegaConf.merge(cfg, OmegaConf.load(path))
+            
     except Exception as e:
         print(f"Error: {e}")
         exit(-1)
@@ -317,7 +323,7 @@ if __name__ == '__main__':
     # Apply any CLI overrides (e.g. training.batch_size=16)
     if args.override:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.override))
-        
+    
     # Check if model name is specified
     assert 'name' in cfg.model, "Error: model name is not specified"
     

@@ -9,9 +9,6 @@
 #SBATCH --mem=4G
 #SBATCH --account=pi-aereditato
 
-# MNI152 template path for intensity normalization
-mni152_template='/project/aereditato/cestari/fsl/data/standard/MNI152_T1_1mm_brain.nii.gz'
-
 # Load your conda environment
 source /software/python-anaconda-2022.05-el8-x86_64/etc/profile.d/conda.sh
 conda activate adni_rcc  
@@ -54,15 +51,11 @@ for (( i = start; i < end; i++ )); do
   # Get filename of .nii file
   nii_filename=$(basename ${nii_path})
 
-  # Perform spm12 normalization
+  # Perform SPM segmentation + bias correction (also writes deformation field)
   matlab -batch "normalize('./data/${filename}/${nii_filename}')"
 
-  # Perform skull stripping
-  export FSLOUTPUTTYPE="NIFTI"
-  bet ./data/${filename}/w${nii_filename} ./data/${filename}/ss${filename}.nii
-  
-  # Perform z score normalization and handles NaNs.
-  python intensity_normalize.py ./data/${filename}/ss${filename}.nii ${mni152_template} ./data/${filename}.nii
+  # Perform z-score normalization and handle NaNs.
+  python intensity_normalize.py ./data/${filename}/wmasked_${nii_filename} ./data/${filename}.nii
 
   # Remove subdir
   rm -rf ./data/${filename}

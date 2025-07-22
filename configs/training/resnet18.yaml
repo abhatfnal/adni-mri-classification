@@ -12,13 +12,16 @@ training:
     lr: 1e-3
   scheduler:
     name: 'CosineAnnealingLR'
-    lr_min: 2e-6
     t_max: 200
+    lr_max: 1e-3
+    lr_min: 2e-6
 
 data:
+  trainval_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm/data/trainval.csv'     
+  test_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm/data/test.csv'    
   augmentation: true
   
-validation:
+cross_validation:
   folds: 5
 
 # separate train, validation, test

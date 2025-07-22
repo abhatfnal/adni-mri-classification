@@ -8,16 +8,14 @@ import nibabel as nib
 import numpy as np
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Histogram-match and normalize NIfTI volumes')
+    parser = argparse.ArgumentParser(description='Intensity normalize NIfTI volumes')
     parser.add_argument('in_path', help='Input NIfTI file path (skull-stripped)')
-    parser.add_argument('template_path', help='Reference NIfTI template path')
     parser.add_argument('out_path', help='Output NIfTI file path')
     args = parser.parse_args(sys.argv[1:])
 
-    # Load image and template
+    # Load image
     img_nii = nib.load(args.in_path)
     img = img_nii.get_fdata().astype(np.float32)
-    template = nib.load(args.template_path).get_fdata().astype(np.float32)
 
     # Replace NaNs with mean
     mean_val = np.nanmean(img)
