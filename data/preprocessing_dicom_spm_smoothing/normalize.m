@@ -1,10 +1,6 @@
 function normalize(nii)
-
-    spm_path = '/project/aereditato/cestari/spm/spm'
-    tpm_path = '/project/aereditato/cestari/spm/spm/tpm/TPM.nii';
-    
     % Add SPM path
-    addpath(spm_path);
+    addpath('/project/aereditato/cestari/spm/spm');
     spm('Defaults','FMRI');
     spm_jobman('initcfg');
   
@@ -14,6 +10,7 @@ function normalize(nii)
     end
   
     [folder, name, ~] = fileparts(nii);
+    tpm_path = '/project/aereditato/cestari/spm/spm/tpm/TPM.nii';
   
     % --- 1. Segmentation: bias correction + tissue probability maps + deformation field
     matlabbatch = [];
@@ -64,6 +61,21 @@ function normalize(nii)
     matlabbatch2{1}.spm.spatial.normalise.write.woptions.prefix = 'w';
   
     spm_jobman('run', matlabbatch2);
+
+    % --- 6. Smooth the normalized image (e.g. 4 mm FWHM)
+    smoothed_file = fullfile(folder, ['w' 'masked_' name '.nii']); 
+    matlabbatch3 = [];  % new batch for smoothing
+    matlabbatch3{1}.spm.spatial.smooth.data   = { smoothed_file };
+    matlabbatch3{1}.spm.spatial.smooth.fwhm   = [4 4 4];      % kernel size in mm
+    matlabbatch3{1}.spm.spatial.smooth.dtype  = 0;            % same data type as input
+    matlabbatch3{1}.spm.spatial.smooth.im     = 0;            % implicit mask off (we’ve already zero‐masked)
+    matlabbatch3{1}.spm.spatial.smooth.prefix = 's';          % produces s<w>masked_*.nii
+
+    % Run smoothing
+    spm_jobman('run', matlabbatch3);
+
+    fprintf('Finished smoothing: %s\n', ['s' 'wmasked_' name '.nii']);
+    
   
     fprintf('Finished preprocessing: %s\n', nii);
   end

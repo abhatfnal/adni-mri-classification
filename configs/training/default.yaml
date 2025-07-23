@@ -14,7 +14,6 @@ training:
 data:
   trainval_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom/data/trainval.csv'     
   test_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom/data/test.csv'    
-  augmentation: true
 
 cross_validation:
   folds: 5

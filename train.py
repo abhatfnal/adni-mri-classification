@@ -23,7 +23,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     from sklearn.metrics import classification_report, confusion_matrix
     from models.registry import get_model
     from data.datasets import ADNIDataset
-    from data.augmentation import random_crop
+    from data.augmentation import build_augmentation, random_crop
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -56,7 +56,12 @@ def train_and_evaluate(cfg_path, exp_dir=None):
 
     model_cfg  = cfg.model
     model_name = str(model_cfg.name)
+    
+    # aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
 
+    # print(aug_transform.transforms[0])
+    # print(aug_transform.transforms[0].probability)
+    
     # Data CSVs
     trainval_csv = cfg.data.trainval_csv
     test_csv     = cfg.data.test_csv

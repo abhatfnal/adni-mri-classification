@@ -14,9 +14,9 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('csv_path', help='Path to dataset csv file.')
-    parser.add_argument('test_size', help='Size of test set as ratio.')
-    parser.add_argument('out_dir', help='Output dir where trainval.csv and test.csv are dumped.')
+    parser.add_argument('--input-csv',required=True, help='Path to dataset csv file.')
+    parser.add_argument('--test_size',required=True, help='Size of test set as ratio.')
+    parser.add_argument('--output-dir',required=True, help='Output dir where trainval.csv and test.csv are dumped.')
     parser.add_argument('-r',required=False, help='Random state of the split')
     
     args = parser.parse_args(sys.argv[1:])
