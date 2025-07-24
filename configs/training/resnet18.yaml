@@ -22,7 +22,11 @@ data:
   augmentation:
     random_crop:
       p: 1
-  
-cross_validation:
-  folds: 2
+    random_flip:
+      p: 0.5
+    random_rotation:
+      p: 0.5
 
+cross_validation:
+  method: 'holdout'
+  val_fraction: 0.2

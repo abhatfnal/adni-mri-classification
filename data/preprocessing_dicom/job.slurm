@@ -9,15 +9,13 @@
 #SBATCH --mem=4G
 #SBATCH --account=pi-aereditato
 
-# MNI152 template path for intensity normalization
-mni152_template='/project/aereditato/cestari/fsl/data/standard/MNI152_T1_1mm_brain.nii.gz'
-
 # Load your conda environment
 source /software/python-anaconda-2022.05-el8-x86_64/etc/profile.d/conda.sh
 conda activate adni_rcc  
+module load matlab
 
 # Get paths of mri scans in zip file
-scan_paths=( $(python get_scan_paths.py "$1") )
+scan_paths=( $(python ../../utils/get_scan_paths.py "$1") )
 
 # Figure out how many scans each of the 100 tasks should handle
 total=${#scan_paths[@]}
@@ -40,7 +38,7 @@ for (( i = start; i < end; i++ )); do
   mkdir -p ./data/${filename}
 
   # Extract slices there
-  python extract_scan_slices.py ${path} $1 ./data/${filename}
+  python ../../utils/extract_scan_slices.py ${path} $1 ./data/${filename}
 
   # Convert to .nii
   dicom2nifti -C ./data/${filename} ./data/${filename}
@@ -62,7 +60,7 @@ for (( i = start; i < end; i++ )); do
   bet ./data/${filename}/w${nii_filename} ./data/${filename}/ss${filename}.nii
   
   # Perform z score normalization and handles NaNs.
-  python intensity_normalize.py ./data/${filename}/ss${filename}.nii ${mni152_template} ./data/${filename}.nii
+  python ../../utils/intensity_normalize.py ./data/${filename}/ss${filename}.nii ./data/${filename}.nii
 
   # Remove subdir
   rm -rf ./data/${filename}

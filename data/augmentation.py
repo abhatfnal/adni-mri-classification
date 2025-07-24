@@ -1,93 +1,92 @@
-import numpy as np
-import torchio as tio
 import torch
-from scipy.ndimage import zoom
+import torch.nn.functional as F
+import pandas as pd
+import nibabel as nib
+import numpy as np
+
+import torchio as tio
+from torch.utils.data import Dataset
+
+def random_crop(
+    volume: torch.Tensor,
+    min_scale: float = 0.5,
+    max_scale: float = 1.0,
+) -> torch.Tensor:
+    """
+    Randomly crop a sub-volume of `volume` and resize it
+    back to the original shape using trilinear interpolation.
+    Input:  4D torch.Tensor (C, D, H, W) on any device.
+    Output: same shape & same device.
+    """
+    C, D, H, W = volume.shape
+    device = volume.device
+
+    # pick random scale
+    scale = torch.empty(1, device=device).uniform_(min_scale, max_scale).item()
+    new_D = max(1, int(D * scale))
+    new_H = max(1, int(H * scale))
+    new_W = max(1, int(W * scale))
+
+    # pick random corner
+    z0 = torch.randint(0, D - new_D + 1, (), device=device).item()
+    y0 = torch.randint(0, H - new_H + 1, (), device=device).item()
+    x0 = torch.randint(0, W - new_W + 1, (), device=device).item()
+
+    # crop
+    cropped = volume[
+        :,
+        z0 : z0 + new_D,
+        y0 : y0 + new_H,
+        x0 : x0 + new_W,
+    ]  # shape (C, new_D, new_H, new_W)
+
+    # prepare for interpolation: add batch dim
+    cropped = cropped.unsqueeze(0)  # (1, C, new_D, new_H, new_W)
+
+    # resize back to (D, H, W) with trilinear
+    resized = F.interpolate(
+        cropped,
+        size=(D, H, W),
+        mode='trilinear',
+        align_corners=False,
+    )
+    return resized.squeeze(0)  # (C, D, H, W) on original device
 
 
-# def random_crop(
-#     volume: np.ndarray,
-#     min_scale: float = 0.5,
-#     max_scale: float = 1.0,
-#     order: int = 1,
-# ) -> np.ndarray:
-#     """
-#     Randomly crop a sub-volume of `volume` and resize it back to original shape.
-    
-#     Only accepts 4D arrays in (C, D, H, W) format.
-#     """
-#     if volume.ndim != 4:
-#         raise ValueError(f"Input must be 4D (C, D, H, W). Got ndim={volume.ndim}")
-    
-#     C, D, H, W = volume.shape
-
-#     # pick random scale and compute new crop size
-#     scale = np.random.uniform(min_scale, max_scale)
-#     new_D = max(1, int(D * scale))
-#     new_H = max(1, int(H * scale))
-#     new_W = max(1, int(W * scale))
-
-#     # choose random corner
-#     z0 = np.random.randint(0, D - new_D + 1)
-#     y0 = np.random.randint(0, H - new_H + 1)
-#     x0 = np.random.randint(0, W - new_W + 1)
-
-#     # crop all channels
-#     cropped = volume[
-#         :,
-#         z0 : z0 + new_D,
-#         y0 : y0 + new_H,
-#         x0 : x0 + new_W,
-#     ]  # shape (C, new_D, new_H, new_W)
-
-#     # zoom factors (1 on the channel axis)
-#     zoom_factors = (
-#         1.0,
-#         D / float(new_D),
-#         H / float(new_H),
-#         W / float(new_W),
-#     )
-
-#     # resize back to (C, D, H, W)
-#     resized = zoom(cropped, zoom_factors, order=order)
-
-#     return torch.from_numpy(resized)
-
-
-
-def build_augmentation(cfg):
-    
-    try:
-        
-        transforms = []
-        
-        # iterate through transform names (keys) and their respective parameters (values)
-        for name, params in cfg.items():
-            
-            if name == 'random_crop':
-                
-                transforms.append(
-                    tio.Lambda(lambda image: random_crop(
-                        image, 
-                        params.get('min_scale',0.5),
-                        params.get('max_scale',1),
-                        params.get('order',1)),
-                        p=params.get('p',0.5)
-                    )
+def build_augmentation(cfg: dict) -> tio.Compose:
+    """
+    Build a torchio Compose where each transform
+    takes & returns a torch.Tensor.
+    """
+    transforms = []
+    for name, params in cfg.items():
+        if name == 'random_crop':
+            transforms.append(
+                tio.Lambda(
+                    lambda x: random_crop(
+                        x,
+                        params.get('min_scale', 0.5),
+                        params.get('max_scale', 1.0),
+                    ),
+                    p=params.get('p', 0.5),
                 )
-                
-            elif name == 'random_flip':
-                pass
-            elif name == 'random_rotation':
-                pass
-            else:
-                raise ValueError(f"Invalid transform name: {name}")
-            
-        return tio.Compose(transforms)
-    
-    except Exception as e:
-        print(f"Error: {e}")
-    
-
+            )
+        elif name == 'random_flip':
+            transforms.append(
+                tio.RandomFlip(axes=('LR',), p=params.get('p', 0.5))
+            )
+        elif name == 'random_rotation':
+            transforms.append(
+                tio.RandomAffine(
+                    scales=1,
+                    degrees=params.get('degrees', 10),
+                    translation=0,
+                    p=params.get('p', 0.5),
+                )
+            )
+        else:
+            raise ValueError(f"Unknown transform: {name}")
+    return tio.Compose(transforms)
 
 
 
@@ -195,33 +194,33 @@ def build_augmentation(cfg):
 
 #     return tio.Compose(transforms)
 
-def random_crop(volume: np.ndarray,
-                min_scale: float = 0.5,
-                max_scale: float = 1.0,
-                order: int = 1) -> np.ndarray:
-    """
-    Randomly crop a sub-volume of `volume` and resize it back.
-    """
-    if volume.ndim != 3:
-        raise ValueError("Input volume must be a 3D array")
+# def random_crop(volume: np.ndarray,
+#                 min_scale: float = 0.5,
+#                 max_scale: float = 1.0,
+#                 order: int = 1) -> np.ndarray:
+#     """
+#     Randomly crop a sub-volume of `volume` and resize it back.
+#     """
+#     if volume.ndim != 3:
+#         raise ValueError("Input volume must be a 3D array")
 
-    D, H, W = volume.shape
-    scale = np.random.uniform(min_scale, max_scale)
-    new_D = max(1, int(D * scale))
-    new_H = max(1, int(H * scale))
-    new_W = max(1, int(W * scale))
+#     D, H, W = volume.shape
+#     scale = np.random.uniform(min_scale, max_scale)
+#     new_D = max(1, int(D * scale))
+#     new_H = max(1, int(H * scale))
+#     new_W = max(1, int(W * scale))
 
-    z0 = np.random.randint(0, D - new_D + 1)
-    y0 = np.random.randint(0, H - new_H + 1)
-    x0 = np.random.randint(0, W - new_W + 1)
+#     z0 = np.random.randint(0, D - new_D + 1)
+#     y0 = np.random.randint(0, H - new_H + 1)
+#     x0 = np.random.randint(0, W - new_W + 1)
 
-    cropped = volume[z0:z0 + new_D,
-                     y0:y0 + new_H,
-                     x0:x0 + new_W]
+#     cropped = volume[z0:z0 + new_D,
+#                      y0:y0 + new_H,
+#                      x0:x0 + new_W]
 
-    zoom_factors = (D / new_D, H / new_H, W / new_W)
-    resized = zoom(cropped, zoom_factors, order=order)
-    return resized
+#     zoom_factors = (D / new_D, H / new_H, W / new_W)
+#     resized = zoom(cropped, zoom_factors, order=order)
+#     return resized
 
 
 if __name__ == "__main__":

@@ -12,9 +12,10 @@
 # Load your conda environment
 source /software/python-anaconda-2022.05-el8-x86_64/etc/profile.d/conda.sh
 conda activate adni_rcc  
+module load matlab
 
 # Get paths of mri scans in zip file
-scan_paths=( $(python get_scan_paths.py "$1") )
+scan_paths=( $(python ../../utils/get_scan_paths.py "$1") )
 
 # Figure out how many scans each of the 100 tasks should handle
 total=${#scan_paths[@]}
@@ -37,7 +38,7 @@ for (( i = start; i < end; i++ )); do
   mkdir -p ./data/${filename}
 
   # Extract slices there
-  python extract_scan_slices.py ${path} $1 ./data/${filename}
+  python ../../utils/extract_scan_slices.py ${path} $1 ./data/${filename}
 
   # Convert to .nii
   dicom2nifti -C ./data/${filename} ./data/${filename}
@@ -55,7 +56,7 @@ for (( i = start; i < end; i++ )); do
   matlab -batch "normalize('./data/${filename}/${nii_filename}')"
 
   # Perform z-score normalization and handle NaNs.
-  python intensity_normalize.py ./data/${filename}/wmasked_${nii_filename} ./data/${filename}.nii
+  python ../../utils/intensity_normalize.py ./data/${filename}/wmasked_${nii_filename} ./data/${filename}.nii
 
   # Remove subdir
   rm -rf ./data/${filename}

@@ -19,7 +19,6 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
     import pandas as pd
     import matplotlib.pyplot as plt
-    from sklearn.model_selection import StratifiedKFold
     from sklearn.metrics import classification_report, confusion_matrix
     from models.registry import get_model
     from data.datasets import ADNIDataset
@@ -36,7 +35,6 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     cfg = OmegaConf.merge(default_cfg, user_cfg)
 
     # Extract core settings
-    folds       = int(cfg.cross_validation.folds)
     seed        = int(cfg.cross_validation.get('seed', 42))
     epochs      = int(cfg.training.epochs)
     batch_size  = int(cfg.training.batch_size)
@@ -57,34 +55,52 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     model_cfg  = cfg.model
     model_name = str(model_cfg.name)
     
-    # aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
-
-    # print(aug_transform.transforms[0])
-    # print(aug_transform.transforms[0].probability)
+    aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
     
     # Data CSVs
     trainval_csv = cfg.data.trainval_csv
     test_csv     = cfg.data.test_csv
 
     # Build datasets: trainval augmented and no-augmentation, plus fixed test
-    dataset_tv_aug = ADNIDataset(trainval_csv, transform=random_crop)
+    dataset_tv_aug = ADNIDataset(trainval_csv, transform=aug_transform)
     dataset_tv     = ADNIDataset(trainval_csv, transform=None)
     dataset_test   = ADNIDataset(test_csv,     transform=None)
 
     test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
 
-    # Prepare indices and labels for Stratified K-Fold
-    labels = dataset_tv.labels()
+    # Prepare indices and labels for splitting
+    labels  = dataset_tv.labels()
     indices = list(range(len(dataset_tv)))
-    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    method = cfg.cross_validation.get('method', 'kfold')
+    seed   = int(cfg.cross_validation.get('seed', 42))
 
-    # Containers for per-fold metrics
+    if method == 'kfold':
+        from sklearn.model_selection import StratifiedKFold
+        n_splits = int(cfg.cross_validation.folds)
+        splitter = StratifiedKFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=seed,
+        )
+        
+    elif method == 'holdout':
+        from sklearn.model_selection import StratifiedShuffleSplit
+        val_frac = float(cfg.cross_validation.val_fraction)
+        splitter = StratifiedShuffleSplit(
+            n_splits=1,
+            test_size=val_frac,
+            random_state=seed,
+        )
+    else:
+        raise ValueError(f"Unknown split method: {method!r}")
+
+    # Containers for metrics
     reports = []
     cms = []
     
     # Loop over folds
-    for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1):
-        print(f"\n===== Fold {fold}/{folds} =====")
+    for fold, (train_idx, val_idx) in enumerate(splitter.split(indices, labels), start=1):
+        print(f"\n===== Fold {fold}/{splitter.get_n_splits()} =====")
 
         # Subsets
         train_set = Subset(dataset_tv_aug, train_idx)
@@ -219,18 +235,21 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         reports.append(report)
         cms.append(cm)
         
-    # Compute and save average metrics across folds
-    avg_report = pd.concat(reports).groupby(level=0).mean()
-    avg_cm = sum(cms) / folds
-    avg_report.to_csv(os.path.join(exp_dir, 'average_classification_report.csv'))
-    avg_cm.to_csv(os.path.join(exp_dir, 'average_confusion_matrix.csv'))
+    if method == 'kfold':
+        avg_report = pd.concat(reports).groupby(level=0).mean()
+        avg_cm     = sum(cms) / int(cfg.cross_validation.folds)
+        avg_report.to_csv(os.path.join(exp_dir, 'average_classification_report.csv'))
+        avg_cm.to_csv(os.path.join(exp_dir, 'average_confusion_matrix.csv'))
+        
+        print("\nAverage classification report across folds:")
+        print(avg_report)
+        print("\nAverage confusion matrix across folds:")
+        print(avg_cm)
+    else:
+        print("Hold-out validation complete. See fold_1 results in", exp_dir)
+        
 
-    print("\nAverage classification report across folds:")
-    print(avg_report)
-    print("\nAverage confusion matrix across folds:")
-    print(avg_cm)
-
-    print(f"\nCross-validation complete. Artifacts under {exp_dir}")
+    print(f"\nEvaluation complete. Artifacts under {exp_dir}")
 
 
 def submit_slurm(config_path, dir_path):
