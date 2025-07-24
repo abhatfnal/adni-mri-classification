@@ -1,0 +1,23 @@
+training:
+  batch_size: 32
+  epochs: 200
+  optimizer:
+    name: 'adam'
+    weight_decay: 0
+    lr: 1e-3
+  scheduler:
+    name: 'CosineAnnealingLR'
+    t_max: 200
+    lr_max: 1e-3
+    lr_min: 2e-6
+
+data:
+  trainval_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom/data/trainval.csv'     
+  test_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom/data/test.csv'    
+
+cross_validation:
+  method: kfold         # “kfold” or “holdout”
+  folds:    5           # only used if method = kfold
+  val_fraction: 0.2     # only used if method = holdout
+  seed:       42
+
