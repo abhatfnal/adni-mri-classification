@@ -11,7 +11,7 @@
 
 # Load your conda environment
 source /software/python-anaconda-2022.05-el8-x86_64/etc/profile.d/conda.sh
-conda activate adni_rcc  
+conda activate adni_rcc
 module load matlab
 
 # Get paths of mri scans in zip file
@@ -52,15 +52,12 @@ for (( i = start; i < end; i++ )); do
   # Get filename of .nii file
   nii_filename=$(basename ${nii_path})
 
-  # Perform spm12 normalization
+  # Perform SPM segmentation + bias correction (also writes deformation field) + skull stripping
+  # + normalisation + smoothing
   matlab -batch "normalize('./data/${filename}/${nii_filename}')"
 
-  # Perform skull stripping
-  export FSLOUTPUTTYPE="NIFTI"
-  bet ./data/${filename}/w${nii_filename} ./data/${filename}/ss${filename}.nii
-  
-  # Perform z score normalization and handles NaNs.
-  python ../../utils/intensity_normalize.py ./data/${filename}/ss${filename}.nii ./data/${filename}.nii
+  # Perform z-score normalization and handles NaNs.
+  python ../../utils/intensity_normalize.py ./data/${filename}/swmasked_${nii_filename} ./data/${filename}.nii
 
   # Remove subdir
   rm -rf ./data/${filename}

@@ -19,11 +19,10 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
     import pandas as pd
     import matplotlib.pyplot as plt
-    from sklearn.model_selection import StratifiedKFold
     from sklearn.metrics import classification_report, confusion_matrix
     from models.registry import get_model
     from data.datasets import ADNIDataset
-    from data.augmentation import random_crop
+    from data.augmentation import build_augmentation, random_crop
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -36,7 +35,6 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     cfg = OmegaConf.merge(default_cfg, user_cfg)
 
     # Extract core settings
-    folds       = int(cfg.cross_validation.folds)
     seed        = int(cfg.cross_validation.get('seed', 42))
     epochs      = int(cfg.training.epochs)
     batch_size  = int(cfg.training.batch_size)
@@ -46,8 +44,9 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     lr          = float(optim_cfg.get('lr', 1e-5))
     weight_decay= float(optim_cfg.get('weight_decay', 0))
 
-    use_scheduler     = 'scheduler' in cfg.training
     scheduler_cfg     = cfg.training.get('scheduler', {})
+    
+    use_scheduler = scheduler_cfg != {}
     scheduler_name    = scheduler_cfg.get('name', 'CosineAnnealingLR')
     scheduler_t_max   = int(scheduler_cfg.get('t_max', epochs))
     scheduler_lr_min  = float(scheduler_cfg.get('lr_min', 1e-6))
@@ -55,36 +54,101 @@ def train_and_evaluate(cfg_path, exp_dir=None):
 
     model_cfg  = cfg.model
     model_name = str(model_cfg.name)
-
+    
+    aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
+    oversample = bool(cfg.data.get('oversample', False))
+    
+    # Print settings
+    print("======|| Configuration ||======")
+    print(">Model: ")
+    print(f"Name: {model_name}")
+    print(f"Parameters: {model_cfg}")
+    print("> General: ")
+    print(f"Epochs: {epochs}")
+    print(f"Batch size: {batch_size}")
+    print(f"Seed: {seed}")
+    print("> Optimizer: ")
+    print(f"Name: {optim_name}")
+    print(f"Learning rate: {lr}")
+    print(f"Weight decay: {weight_decay}")
+    print("> Scheduler: ")
+    print(f"Name: {scheduler_name}")
+    print(f"LR max: {scheduler_lr_max}")
+    print(f"LR min: {scheduler_lr_min}")
+    print(f"T-max: {scheduler_t_max}")
+    print("> Data: ")
+    print(f"Augmentation transforms: {aug_transform.transforms}")
+    print(f"Oversample: {oversample}")
+    
+    
     # Data CSVs
     trainval_csv = cfg.data.trainval_csv
     test_csv     = cfg.data.test_csv
 
     # Build datasets: trainval augmented and no-augmentation, plus fixed test
-    dataset_tv_aug = ADNIDataset(trainval_csv, transform=random_crop)
+    dataset_tv_aug = ADNIDataset(trainval_csv, transform=aug_transform)
     dataset_tv     = ADNIDataset(trainval_csv, transform=None)
     dataset_test   = ADNIDataset(test_csv,     transform=None)
 
     test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
 
-    # Prepare indices and labels for Stratified K-Fold
-    labels = dataset_tv.labels()
+    # Prepare indices and labels for splitting
+    labels  = dataset_tv.labels()
     indices = list(range(len(dataset_tv)))
-    skf = StratifiedKFold(n_splits=folds, shuffle=True, random_state=seed)
+    method = cfg.cross_validation.get('method', 'kfold')
+    seed   = int(cfg.cross_validation.get('seed', 42))
 
-    # Containers for per-fold metrics
+    if method == 'kfold':
+        from sklearn.model_selection import StratifiedKFold
+        n_splits = int(cfg.cross_validation.folds)
+        splitter = StratifiedKFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=seed,
+        )
+        
+    elif method == 'holdout':
+        from sklearn.model_selection import StratifiedShuffleSplit
+        val_frac = float(cfg.cross_validation.val_fraction)
+        splitter = StratifiedShuffleSplit(
+            n_splits=1,
+            test_size=val_frac,
+            random_state=seed,
+        )
+    else:
+        raise ValueError(f"Unknown split method: {method!r}")
+
+    # Containers for metrics
     reports = []
     cms = []
     
     # Loop over folds
-    for fold, (train_idx, val_idx) in enumerate(skf.split(indices, labels), start=1):
-        print(f"\n===== Fold {fold}/{folds} =====")
+    for fold, (train_idx, val_idx) in enumerate(splitter.split(indices, labels), start=1):
+        print(f"\n===== Fold {fold}/{splitter.get_n_splits()} =====")
 
         # Subsets
         train_set = Subset(dataset_tv_aug, train_idx)
         val_set   = Subset(dataset_tv,     val_idx)
 
-        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        # Data loaders
+        if oversample:
+            
+            # Create weighted random sampler to sample uniformly from all classes
+            import numpy as np
+            from torch.utils.data import WeightedRandomSampler
+            
+            train_labels = np.array(labels)[train_idx]
+            class_weights = 1/np.bincount(train_labels)
+            sample_weights = class_weights[train_labels]
+            
+            sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
+            
+            # Create train loader
+            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler)
+        
+        else:
+            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True)
+        
         val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False)
 
         # Initialize model, loss, optimizer
@@ -213,18 +277,21 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         reports.append(report)
         cms.append(cm)
         
-    # Compute and save average metrics across folds
-    avg_report = pd.concat(reports).groupby(level=0).mean()
-    avg_cm = sum(cms) / folds
-    avg_report.to_csv(os.path.join(exp_dir, 'average_classification_report.csv'))
-    avg_cm.to_csv(os.path.join(exp_dir, 'average_confusion_matrix.csv'))
+    if method == 'kfold':
+        avg_report = pd.concat(reports).groupby(level=0).mean()
+        avg_cm     = sum(cms) / int(cfg.cross_validation.folds)
+        avg_report.to_csv(os.path.join(exp_dir, 'average_classification_report.csv'))
+        avg_cm.to_csv(os.path.join(exp_dir, 'average_confusion_matrix.csv'))
+        
+        print("\nAverage classification report across folds:")
+        print(avg_report)
+        print("\nAverage confusion matrix across folds:")
+        print(avg_cm)
+    else:
+        print("Hold-out validation complete. See fold_1 results in", exp_dir)
+        
 
-    print("\nAverage classification report across folds:")
-    print(avg_report)
-    print("\nAverage confusion matrix across folds:")
-    print(avg_cm)
-
-    print(f"\nCross-validation complete. Artifacts under {exp_dir}")
+    print(f"\nEvaluation complete. Artifacts under {exp_dir}")
 
 
 def submit_slurm(config_path, dir_path):
@@ -307,9 +374,14 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # Load default config
+    cfg = OmegaConf.load(DEFAULT_CONFIG_PATH)
+    
     # Load and merge all YAML configs
     try:
-        cfg = OmegaConf.merge(*[OmegaConf.load(path) for path in args.config])
+        for path in args.config:
+            cfg = OmegaConf.merge(cfg, OmegaConf.load(path))
+            
     except Exception as e:
         print(f"Error: {e}")
         exit(-1)
@@ -317,7 +389,7 @@ if __name__ == '__main__':
     # Apply any CLI overrides (e.g. training.batch_size=16)
     if args.override:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.override))
-        
+    
     # Check if model name is specified
     assert 'name' in cfg.model, "Error: model name is not specified"
     

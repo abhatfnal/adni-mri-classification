@@ -52,15 +52,11 @@ for (( i = start; i < end; i++ )); do
   # Get filename of .nii file
   nii_filename=$(basename ${nii_path})
 
-  # Perform spm12 normalization
+  # Perform SPM segmentation + bias correction (also writes deformation field)
   matlab -batch "normalize('./data/${filename}/${nii_filename}')"
 
-  # Perform skull stripping
-  export FSLOUTPUTTYPE="NIFTI"
-  bet ./data/${filename}/w${nii_filename} ./data/${filename}/ss${filename}.nii
-  
-  # Perform z score normalization and handles NaNs.
-  python ../../utils/intensity_normalize.py ./data/${filename}/ss${filename}.nii ./data/${filename}.nii
+  # Perform z-score normalization and handle NaNs.
+  python ../../utils/intensity_normalize.py ./data/${filename}/wmasked_${nii_filename} ./data/${filename}.nii
 
   # Remove subdir
   rm -rf ./data/${filename}
