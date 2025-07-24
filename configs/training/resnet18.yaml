@@ -6,13 +6,13 @@ model:
 
 training:
   batch_size: 8
-  epochs: 400
+  epochs: 200
   optimizer:
     name: 'adam'
     lr: 1e-3
   scheduler:
     name: 'CosineAnnealingLR'
-    t_max: 400
+    t_max: 200
     lr_max: 1e-3
     lr_min: 2e-6
 
@@ -22,11 +22,8 @@ data:
   augmentation:
     random_crop:
       p: 1
-    random_flip:
-      p: 0.5
-    random_rotation:
-      p: 0.5
+  oversample: true
 
 cross_validation:
-  method: 'holdout'
-  val_fraction: 0.2
+  method: kfold
+  folds: 5

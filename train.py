@@ -56,6 +56,30 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     model_name = str(model_cfg.name)
     
     aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
+    oversample = bool(cfg.data.get('oversample', False))
+    
+    # Print settings
+    print("======|| Configuration ||======")
+    print(">Model: ")
+    print(f"Name: {model_name}")
+    print(f"Parameters: {model_cfg}")
+    print("> General: ")
+    print(f"Epochs: {epochs}")
+    print(f"Batch size: {batch_size}")
+    print(f"Seed: {seed}")
+    print("> Optimizer: ")
+    print(f"Name: {optim_name}")
+    print(f"Learning rate: {lr}")
+    print(f"Weight decay: {weight_decay}")
+    print("> Scheduler: ")
+    print(f"Name: {scheduler_name}")
+    print(f"LR max: {scheduler_lr_max}")
+    print(f"LR min: {scheduler_lr_min}")
+    print(f"T-max: {scheduler_t_max}")
+    print("> Data: ")
+    print(f"Augmentation transforms: {aug_transform.transforms}")
+    print(f"Oversample: {oversample}")
+    
     
     # Data CSVs
     trainval_csv = cfg.data.trainval_csv
@@ -106,7 +130,25 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         train_set = Subset(dataset_tv_aug, train_idx)
         val_set   = Subset(dataset_tv,     val_idx)
 
-        train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        # Data loaders
+        if oversample:
+            
+            # Create weighted random sampler to sample uniformly from all classes
+            import numpy as np
+            from torch.utils.data import WeightedRandomSampler
+            
+            train_labels = np.array(labels)[train_idx]
+            class_weights = 1/np.bincount(train_labels)
+            sample_weights = class_weights[train_labels]
+            
+            sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
+            
+            # Create train loader
+            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler)
+        
+        else:
+            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True)
+        
         val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False)
 
         # Initialize model, loss, optimizer

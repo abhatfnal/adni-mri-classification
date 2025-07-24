@@ -75,12 +75,12 @@ def build_augmentation(cfg: dict) -> tio.Compose:
             transforms.append(
                 tio.RandomFlip(axes=('LR',), p=params.get('p', 0.5))
             )
-        elif name == 'random_rotation':
+        elif name == 'random_affine':
             transforms.append(
                 tio.RandomAffine(
-                    scales=1,
+                    scales=params.get('scales',1),
                     degrees=params.get('degrees', 10),
-                    translation=0,
+                    translation=params.get('translation',10),
                     p=params.get('p', 0.5),
                 )
             )
