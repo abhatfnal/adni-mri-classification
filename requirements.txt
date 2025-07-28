@@ -1,7 +1,8 @@
 acres==0.5.0
 antlr4-python3-runtime==4.9.3
 beautifulsoup4==4.13.4
-cached-property @ file:///home/conda/feedstock_root/build_artifacts/cached_property_1615209429212/work
+blessed==1.21.0
+cached-property==1.5.2
 certifi==2025.6.15
 charset-normalizer==3.4.2
 ci-info==0.3.0
@@ -10,20 +11,22 @@ contourpy==1.3.2
 cycler==0.12.1
 Deprecated==1.2.18
 dicom2nifti==2.6.2
-dill @ file:///home/conda/feedstock_root/build_artifacts/dill_1744798524990/work
+dill==0.4.0
+editor==1.6.6
 einops==0.8.1
 etelemetry==0.3.1
 filelock==3.18.0
 fonttools==4.58.4
-fslpy @ file:///home/conda/feedstock_root/build_artifacts/fslpy_1749630097073/work
+fslpy==3.23.0
 fsspec==2025.5.1
 gdown==5.2.0
-h5py @ file:///home/conda/feedstock_root/build_artifacts/h5py_1749298262889/work
+h5py==3.14.0
 humanize==4.12.3
 hydra-core==1.3.2
 idna==3.10
 imageio==2.37.0
-importlib_resources @ file:///home/conda/feedstock_root/build_artifacts/importlib_resources_1736252299705/work
+importlib_resources==6.5.2
+inquirer==3.4.0
 isodate==0.7.2
 Jinja2==3.1.6
 joblib==1.5.1
@@ -38,9 +41,9 @@ mdurl==0.1.2
 mpmath==1.3.0
 mpython-core==25.4rc1
 networkx==3.4.2
-nibabel @ file:///home/conda/feedstock_root/build_artifacts/nibabel_1734022767841/work
+nibabel==5.3.2
 nipype==1.10.0
-numpy @ file:///home/conda/feedstock_root/build_artifacts/numpy_1747544640217/work/dist/numpy-2.2.6-cp310-cp310-linux_x86_64.whl#sha256=d6d964caeef85d00073d27cd62b46883d275b3d8162f723f0fcabbd0b3cc3f9d
+numpy==2.2.6
 nvidia-cublas-cu12==12.6.4.1
 nvidia-cuda-cupti-cu12==12.6.80
 nvidia-cuda-nvrtc-cu12==12.6.77
@@ -56,9 +59,10 @@ nvidia-nccl-cu12==2.26.2
 nvidia-nvjitlink-cu12==12.6.85
 nvidia-nvtx-cu12==12.6.77
 omegaconf==2.3.0
-packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1745345660/work
+packaging==25.0
 pandas==2.3.0
 pillow==11.3.0
+pip==25.1.1
 prov==2.1.1
 puremagic==1.30
 pydicom==3.0.1
@@ -71,11 +75,14 @@ python-gdcm==3.0.26
 pytz==2025.2
 PyYAML==6.0.2
 rdflib==7.1.4
+readchar==4.2.1
 requests==2.32.4
 rich==14.0.0
+runs==1.2.2
 scikit-image==0.25.2
 scikit-learn==1.7.0
-scipy @ file:///home/conda/feedstock_root/build_artifacts/scipy-split_1739790642651/work/dist/scipy-1.15.2-cp310-cp310-linux_x86_64.whl#sha256=9e52bad6c3294d1a5b04a13632118ca2157130603c6c018c2d710162b223b27e
+scipy==1.15.2
+setuptools==80.9.0
 shellingham==1.5.4
 simpleitk==2.5.2
 simplejson==3.20.1
@@ -96,5 +103,8 @@ typer==0.16.0
 typing_extensions==4.14.0
 tzdata==2025.2
 urllib3==2.5.0
+wcwidth==0.2.13
+wheel==0.45.1
 wrapt==1.17.2
-zipp @ file:///home/conda/feedstock_root/build_artifacts/zipp_1749421620841/work
+xmod==1.8.1
+zipp==3.23.0

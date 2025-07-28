@@ -1,11 +1,7 @@
 import torch
 import torch.nn.functional as F
-import pandas as pd
-import nibabel as nib
-import numpy as np
 
 import torchio as tio
-from torch.utils.data import Dataset
 
 def random_crop(
     volume: torch.Tensor,

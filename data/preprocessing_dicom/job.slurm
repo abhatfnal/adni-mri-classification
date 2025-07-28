@@ -9,10 +9,8 @@
 #SBATCH --mem=4G
 #SBATCH --account=pi-aereditato
 
-# Load your conda environment
-source /software/python-anaconda-2022.05-el8-x86_64/etc/profile.d/conda.sh
-conda activate adni_rcc  
-module load matlab
+# Load environment
+source ../../env_setup.sh
 
 # Get paths of mri scans in zip file
 scan_paths=( $(python ../../utils/get_scan_paths.py "$1") )
@@ -66,3 +64,16 @@ for (( i = start; i < end; i++ )); do
   rm -rf ./data/${filename}
 
 done
+
+# Only one job (1st): wait for all other jobs to finish and create .csv file
+if [ "$job_idx" -eq 0 ]; then
+  while [ $(ls -l ./data | grep .nii | wc -l) -ne "$total" ]; do
+    sleep 10
+    echo "Waiting... $(ls -l ./data | grep .nii | wc -l)/$total files"
+  done
+
+  echo "All files ready. Running match_diagnosis.py"
+
+  python ../../utils/match_diagnosis.py --diagnosis-file "$DIAGNOSIS_FILE" --scan-dir ./data
+  
+fi

@@ -90,7 +90,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     dataset_tv     = ADNIDataset(trainval_csv, transform=None)
     dataset_test   = ADNIDataset(test_csv,     transform=None)
 
-    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # Prepare indices and labels for splitting
     labels  = dataset_tv.labels()
@@ -144,12 +144,12 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
             
             # Create train loader
-            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler)
+            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler, num_workers=4, pin_memory=True)
         
         else:
-            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True)
+            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
         
-        val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False)
+        val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
         # Initialize model, loss, optimizer
         ModelClass = get_model(model_name)
