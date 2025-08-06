@@ -77,7 +77,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     print(f"LR min: {scheduler_lr_min}")
     print(f"T-max: {scheduler_t_max}")
     print("> Data: ")
-    print(f"Augmentation transforms: {aug_transform.transforms}")
+    if aug_transform != None:
+        print(f"Augmentation transforms: {aug_transform.transforms}")
     print(f"Oversample: {oversample}")
     
     
@@ -238,7 +239,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
                 best_epoch = epoch
-                torch.save(model.state_dict(), os.path.join(fold_dir, 'best_model.pth'))
+                torch.save(model, os.path.join(fold_dir, 'best_model.pth'))
 
         # Plot and save loss curve
         plt.figure()
@@ -252,8 +253,16 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         plt.close()
 
         # Test evaluation
-        model.load_state_dict(torch.load(os.path.join(fold_dir, 'best_model.pth')))
+        
+        # load the full model back in one step
+        model = torch.load(
+            os.path.join(fold_dir, 'best_model.pth'),
+            map_location=device,
+            weights_only=False
+        )
+        model.to(device)   # make extra-sure it’s on the right device
         model.eval()
+
         all_preds, all_lbls = [], []
         with torch.no_grad():
             for imgs, lbls in test_loader:
@@ -310,9 +319,9 @@ def submit_slurm(config_path, dir_path):
 #SBATCH --job-name={job_name}
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=64G
-#SBATCH --time=15:00:00
+#SBATCH --time=8:00:00
 #SBATCH --output={log_out}
 #SBATCH --error={log_err}
 #SBATCH --account=pi-aereditato

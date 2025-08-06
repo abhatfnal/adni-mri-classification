@@ -31,6 +31,6 @@ This creates:
 For training, in your configuration file update the following fields:
 ```yaml
 data:
-  trainval_csv: ./data/trainval.csv
-  test_csv: ./data/test.csv
+  trainval_csv: /absolute/path/to/data/trainval.csv
+  test_csv: /absolute/path/to/data/test.csv
 ```
