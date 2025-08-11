@@ -1,0 +1,29 @@
+training:
+  batch_size: 8
+  epochs: 100
+  optimizer:
+    name: adam
+    weight_decay: 0
+    lr: 0.001
+  scheduler:
+    name: CosineAnnealingLR
+    t_max: 100
+    lr_max: 0.001
+    lr_min: 2.0e-06
+data:
+  trainval_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm_2/data/trainval.csv
+  test_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm_2/data/test.csv
+  augmentation:
+    random_flip:
+      p: 0.5
+    random_affine:
+      degrees: 0
+      translation: 5
+      p: 0.3
+cross_validation:
+  method: holdout
+  folds: 5
+  val_fraction: 0.2
+  seed: 42
+model:
+  name: mynet

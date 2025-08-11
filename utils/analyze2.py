@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 from omegaconf import OmegaConf
 
-from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam import GradCAM, EigenCAM, GradCAMPlusPlus, LayerCAM,ScoreCAM, ShapleyCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
@@ -56,7 +56,7 @@ def load_dataset(csv_path):
     return dataset
 
 # Load model from the specified path
-@st.cache_resource
+# @st.cache_resource
 def load_model(model_path):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file {model_path} does not exist.")
@@ -64,7 +64,6 @@ def load_model(model_path):
     model = torch.load(model_path, map_location=torch.device('cpu'), weights_only=False)
     return model
 
-@st.cache_data
 def compute_gradcam(model_path, volume_index, target_class, target_layer_name):
     
     # Load model and dataset
@@ -84,103 +83,15 @@ def compute_gradcam(model_path, volume_index, target_class, target_layer_name):
             target_layer = module
             break
     
+    with EigenCAM(model=model, target_layers=[ target_layer ]) as cam:
+       gcam_overlay = cam(input_tensor, targets=[ ClassifierOutputTarget(target_class)])
     # Compute gradcam
-    with GradCAM(model=model, target_layers=[ target_layer]) as cam:   
-        gcam_overlay = cam(input_tensor, targets=[ ClassifierOutputTarget(target_class)])
+    # with EigenCAM(model=model, target_layers=[ target_layer]) as cam:   
+    #     gcam_overlay = cam(input_tensor, targets=[ ClassifierOutputTarget(target_class)])
+    
+    print(f"Computing EigenCam: Class: {target_class}")
     
     return gcam_overlay.squeeze(0)
-  
-
-
-# @st.cache_data
-# def compute_gradcam(model_path, volume_index, target_class, target_layer_name):
-#     # Load model and dataset
-#     model = load_model(model_path)
-#     dataset = load_dataset(st.session_state["exp_dataset_csv"])
-    
-#     # Get volume and prepare input
-#     volume, _ = dataset[volume_index]
-#     input_tensor = volume.unsqueeze(0).requires_grad_(True) # Add batch dimension for forward pass
-    
-    
-#     #print("______")
-#     #print(f" Input tensor shape: { input_tensor.shape}")    # (1, C, D, H, W)
-    
-#     out_shape = input_tensor.shape[2:]
-    
-#     #print(f" Final out shape of gradcam: {out_shape}")       # (D, H, W)
-    
-#     # Forward pass - manually capture feature maps
-#     feature_maps = None
-    
-#     def forward_hook(module, input, output):
-#         nonlocal feature_maps
-#         feature_maps = output.detach()
-    
-#     # Find target layer
-#     target_layer = None
-#     for name, module in model.named_modules():
-#         if name == target_layer_name:
-#             target_layer = module
-#             break
-    
-#     if target_layer is None:
-#         raise ValueError(f"Layer {target_layer_name} not found in model")
-    
-#     # Register forward hook
-#     handle = target_layer.register_forward_hook(forward_hook)
-    
-#     # Forward pass
-#     model.eval()
-#     output = model(input_tensor)
-    
-    
-#     # Zero gradients and backward pass
-#     model.zero_grad()
-#     one_hot = torch.zeros_like(output)
-#     one_hot[0, target_class] = 1
-#     output.backward(gradient=one_hot)
-    
-#     # Get gradients
-#     grads = input_tensor.grad.squeeze(0)    # Remove batch dimension
-#     feature_maps = feature_maps.squeeze(0)  # remove batch dimension
-    
-#     #print(f"Gradients shape: {grads.shape}") #(C, D, H, W)
-    
-#     # Remove hook
-#     handle.remove()
-    
-#     # Compute weights and CAM
-#     weights = torch.mean(grads, dim=(1, 2, 3))  # [C]
-    
-#     #print(f"Weights shape: {weights.shape}")
-#     #print(f"Feature maps shape: {feature_maps.shape}")
-    
-#     cam = torch.zeros_like(feature_maps[0])
-#     for i in range(weights.shape[0]):  # Loop through channels
-#         cam += weights[i] * feature_maps[i]
-    
-#     # Post-processing
-#     cam = torch.relu(cam).numpy()
-#     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-    
-#     # Convert to tensor, add batch and channel dimensions for interpolation
-#     cam_tensor = torch.tensor(cam).unsqueeze(0).unsqueeze(0).float()
-    
-#     #print(f"Cam tensor shape: {cam_tensor.shape}")
-    
-#     # Resize to match input volume
-#     cam = torch.nn.functional.interpolate(
-#         cam_tensor,
-#         size=out_shape,
-#         mode='trilinear',
-#         align_corners=False
-#     )
-    
-#     #print(f"Interpolated final shape: {cam.shape}")
-
-#     cam = cam.squeeze(0).squeeze(0) # Remove channel and batch dims
-#     return cam.numpy()
 
 # Computes predictions of selected model on dataset
 @st.cache_data
@@ -319,15 +230,14 @@ def create_gradcam_menu(model_path):
     # Load model
     model = load_model(model_path)
     
-    # Get convolutional layers list
-    conv_layers = [name for name, module in model.named_modules() 
-                if isinstance(module, (torch.nn.Conv3d))]
+    # Get layers list
+    layers = [name for name, module in model.named_modules() ]
     
     col1, col2 = st.columns(2)
     
     with col1:
         # Select layer to apply gradcam
-        st.session_state["gradcam_layer"] = st.selectbox("Layer", options = conv_layers, index=(len(conv_layers)-1))
+        st.session_state["gradcam_layer"] = st.selectbox("Layer", options = layers, index=(len(layers)-1))
     
     with col2:
         # Select target class
@@ -426,27 +336,6 @@ def create_slice_plot(volume_index, axis, gradcam_volume=None):
         'x': 0.0
     }
     
-    
-    # Create slider dynamically
-    # slider = {
-    #     'steps': [
-    #         {
-    #             'method': 'restyle',
-    #             'label': str(i),
-    #             'args': [{'z': [slices[i]]}, [0]]  # Update only first trace
-    #         }
-    #         for i in range(len(slices))
-    #     ],
-    #     'active': active_idx,
-    #     'currentvalue': {'prefix': prefix},
-    #     'pad': {'t': 30},
-    #     'len': 1.0,
-    #     'x': 0.0
-    # }
-    
-    # Create figure
-    #fig = go.Figure(data=heatmap)
-    
     fig.update_layout(
         height=400,
         margin=dict(l=0, r=0, t=30, b=80),
@@ -479,7 +368,7 @@ def create_experiment_page():
         st.session_state["model_path"] = os.path.join(st.session_state["exp_dir"], f"fold_{ st.session_state['exp_selected_fold']}/best_model.pth")
     
     else:
-        st.session_state["model_path"] = os.path.join(st.session_state["exp_dir"], "best_model.pth")
+        st.session_state["model_path"] = os.path.join(st.session_state["exp_dir"], "fold_1/best_model.pth")
         
     # Compute predictions
     df = compute_predictions(st.session_state["model_path"], st.session_state["exp_dataset_csv"])

@@ -74,7 +74,7 @@ def build_augmentation(cfg: dict) -> tio.Compose:
         elif name == 'random_affine':
             transforms.append(
                 tio.RandomAffine(
-                    scales=params.get('scales',1),
+                    scales=params.get('scales',0),
                     degrees=params.get('degrees', 10),
                     translation=params.get('translation',10),
                     p=params.get('p', 0.5),

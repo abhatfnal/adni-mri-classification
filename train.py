@@ -7,6 +7,8 @@ import yaml
 import datetime
 import argparse
 
+from inspect import getfile
+from models.registry import get_model
 from omegaconf import OmegaConf
 
 # Path to default config file
@@ -20,7 +22,6 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     import pandas as pd
     import matplotlib.pyplot as plt
     from sklearn.metrics import classification_report, confusion_matrix
-    from models.registry import get_model
     from data.datasets import ADNIDataset
     from data.augmentation import build_augmentation, random_crop
 
@@ -79,6 +80,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     print("> Data: ")
     if aug_transform != None:
         print(f"Augmentation transforms: {aug_transform.transforms}")
+    else:
+        print(f"Augmentation: None")
     print(f"Oversample: {oversample}")
     
     
@@ -202,7 +205,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
                 imgs, lbls = imgs.to(device), lbls.to(device)
                 optimizer.zero_grad()
                 out = model(imgs)
-                loss = criterion(out, lbls)
+                # loss = criterion(out, lbls)
+                loss = criterion(out, lbls) + 0.0005*model.gap_out.abs().mean()    # L1 reg to final activations
                 loss.backward()
                 optimizer.step()
                 if use_scheduler and scheduler_name == 'OneCycleLR':
@@ -320,8 +324,8 @@ def submit_slurm(config_path, dir_path):
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=64G
-#SBATCH --time=8:00:00
+#SBATCH --mem=4G
+#SBATCH --time=4:00:00
 #SBATCH --output={log_out}
 #SBATCH --error={log_err}
 #SBATCH --account=pi-aereditato
@@ -415,6 +419,14 @@ if __name__ == '__main__':
     # Dump all configs to file
     config_path = os.path.join(exp_dir,"config.yaml")
     OmegaConf.save(cfg, config_path)
+    
+    # Dump original model file
+    model_path = getfile(get_model(cfg.model.name))
+    
+    with open(model_path, "rb") as src, open(exp_dir + '/model.py', "wb") as dst:
+        while chunk := src.read(8192):  # 8 KB buffer
+            dst.write(chunk)
+    
     
     # Dispatch
     if args.job: 

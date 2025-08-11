@@ -32,7 +32,7 @@ class Simple3DCNN(BaseModel):
         self.bn3 = nn.BatchNorm3d(32)
         self.pool3 = nn.MaxPool3d(2)
 
-        self.fc1 = nn.Linear(32 * 16 * 16 * 16, 128)
+        self.fc1 = nn.Linear(32 * 9 * 9 * 11, 128)
         self.dropout = nn.Dropout(dropout)
         self.fc2 = nn.Linear(128, num_classes)
 
@@ -46,8 +46,8 @@ class Simple3DCNN(BaseModel):
         return x
 
 if __name__ == "__main__":
-    model = Simple3DCNN()
+    model = Simple3DCNN({})
     print(model)
-    sample = torch.randn(1, 1, 128, 128, 128)
+    sample = torch.randn(1, 1, 79, 95, 79)
     out = model(sample)
     print(out.shape)  # Should be [1, 3] for 3 classes (CN, MCI, AD)
