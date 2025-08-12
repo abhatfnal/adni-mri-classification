@@ -62,6 +62,7 @@ def load_model(model_path):
         raise FileNotFoundError(f"Model file {model_path} does not exist.")
 
     model = torch.load(model_path, map_location=torch.device('cpu'), weights_only=False)
+    
     return model
 
 def compute_gradcam(model_path, volume_index, target_class, target_layer_name):

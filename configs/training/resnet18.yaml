@@ -29,5 +29,5 @@ data:
       translation: 5
 
 cross_validation:
-  method: holdout
+  method: kfold
   folds: 5

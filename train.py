@@ -12,7 +12,7 @@ from models.registry import get_model
 from omegaconf import OmegaConf
 
 # Path to default config file
-DEFAULT_CONFIG_PATH = '/project/aereditato/cestari/adni-mri-classification/configs/training/default.yaml'
+DEFAULT_CONFIG_PATH = './configs/training/default.yaml'
 
 def train_and_evaluate(cfg_path, exp_dir=None):
     import torch
@@ -44,6 +44,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     optim_name  = optim_cfg.get('name', 'adam')
     lr          = float(optim_cfg.get('lr', 1e-5))
     weight_decay= float(optim_cfg.get('weight_decay', 0))
+    patience = int(optim_cfg.get('patience',-1))
 
     scheduler_cfg     = cfg.training.get('scheduler', {})
     
@@ -197,6 +198,9 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         best_epoch = 0
         train_losses, val_losses = [], []
 
+        # Initialize patience counter
+        patience_counter = 0
+        
         # Training loop
         for epoch in range(1, epochs+1):
             model.train()
@@ -205,8 +209,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
                 imgs, lbls = imgs.to(device), lbls.to(device)
                 optimizer.zero_grad()
                 out = model(imgs)
-                # loss = criterion(out, lbls)
-                loss = criterion(out, lbls) + 0.0005*model.gap_out.abs().mean()    # L1 reg to final activations
+                loss = criterion(out, lbls)
+                #loss = criterion(out, lbls) + 0.0001*model.cbam_out.abs().mean()
                 loss.backward()
                 optimizer.step()
                 if use_scheduler and scheduler_name == 'OneCycleLR':
@@ -244,6 +248,15 @@ def train_and_evaluate(cfg_path, exp_dir=None):
                 best_val_loss = avg_val
                 best_epoch = epoch
                 torch.save(model, os.path.join(fold_dir, 'best_model.pth'))
+                
+                # Set patience counter to 0
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            # If patience is enabled and patience counter exceeds patience, stop training
+            if patience > 0 and patience_counter > patience:
+                break
 
         # Plot and save loss curve
         plt.figure()

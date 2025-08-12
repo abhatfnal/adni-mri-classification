@@ -30,7 +30,7 @@ corresponding to the trainval and test set of the desired size.
 
 ## 3. Configure Training Inputs
 
-For training, in your configuration file update the following fields:
+For training, in your configuration file (for instance resnet18.yaml) update the following fields:
 ```yaml
 data:
   trainval_csv: /absolute/path/to/trainval.csv

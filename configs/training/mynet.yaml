@@ -1,13 +1,14 @@
 training:
   batch_size: 8
-  epochs: 100
+  epochs: 400
   optimizer:
     name: adam
     weight_decay: 0
     lr: 0.001
+    patience: 50
   scheduler:
     name: CosineAnnealingLR
-    t_max: 100
+    t_max: 400
     lr_max: 0.001
     lr_min: 2.0e-06
 data:

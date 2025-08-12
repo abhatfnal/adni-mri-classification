@@ -119,7 +119,6 @@ class ResNet14(BaseModel):
         initial_filters = int(self.cfg.get('init_filters', 4))
         input_shape  = tuple(self.cfg.get('input_shape', (1, 128, 128, 128))) # (C, D, H, W)
         
-        avgpool_kernel_size = 2
         
         # initial block
         self.initial_block = nn.Sequential(
@@ -141,11 +140,11 @@ class ResNet14(BaseModel):
         # batch norm
         self.norm = nn.BatchNorm3d(initial_filters*4)
         
-        # avg pool
-        self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: ? (initial_filters*4, floor(D/16), floor(H/16), floor(W/16))
+        # Global max pooling 
+        self.gmp = nn.AdaptiveMaxPool3d(1)
         
         # final fc layer (hardcoded dims)
-        self.fc1 = nn.Linear(2400, num_classes)
+        self.fc1 = nn.Linear(initial_filters*4, num_classes)
         
     def forward(self, x):
         
@@ -155,7 +154,7 @@ class ResNet14(BaseModel):
         x = self.bb_2(x)
         x = self.bb_3(x)
         
-        x = self.avgpool(self.norm(x))
+        x = self.gmp(self.norm(x))
         
         x = x.view(x.size(0), -1)
         

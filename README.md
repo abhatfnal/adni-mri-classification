@@ -79,12 +79,12 @@ source env_setup.sh
 
 Open one preprocessing pipeline folder under the `data/` folder (recommended: `data/preprocessing_dicom_spm`)  and follow the instructions to produce the preprocessed data.
 
-### 3. Run training with a simple model
+### 3. Run training with ResNet18 model
 
 After having updated the paths to `trainval.csv` and `test.csv` in the desired configuation file, as described in the preprocessing instructions, from the project root directory run
 
 ```bash 
-python train.py --config configs/training/resnet18.yaml
+python train.py --config configs/training/resnet18.yaml --job
 ```
 
 ---
