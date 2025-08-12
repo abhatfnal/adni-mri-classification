@@ -1,11 +1,7 @@
 import torch
 import torch.nn.functional as F
-import pandas as pd
-import nibabel as nib
-import numpy as np
 
 import torchio as tio
-from torch.utils.data import Dataset
 
 def random_crop(
     volume: torch.Tensor,
@@ -78,7 +74,7 @@ def build_augmentation(cfg: dict) -> tio.Compose:
         elif name == 'random_affine':
             transforms.append(
                 tio.RandomAffine(
-                    scales=params.get('scales',1),
+                    scales=params.get('scales',0),
                     degrees=params.get('degrees', 10),
                     translation=params.get('translation',10),
                     p=params.get('p', 0.5),

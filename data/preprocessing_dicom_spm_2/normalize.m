@@ -40,10 +40,15 @@ function normalize(nii)
   
     spm_jobman('run', matlabbatch);
   
-    % --- 2. Create brain mask: c1 + c2 > 0.2
+    % --- 2. Create brain mask: c1 + c2 > 0.5
     c1 = spm_read_vols(spm_vol(fullfile(folder, ['c1' name '.nii'])));
     c2 = spm_read_vols(spm_vol(fullfile(folder, ['c2' name '.nii'])));
-    brain_mask = (c1 + c2) > 0.2;
+    brain_mask = (c1 + c2) > 0.5;
+
+    % save it for later
+    brain_mask_vol = spm_vol(fullfile(folder, ['c1' name '.nii'])); % Borrow header
+    brain_mask_vol.fname = fullfile(folder, ['brain_mask_' name '.nii']);
+    spm_write_vol(brain_mask_vol, brain_mask);
   
     % --- 3. Apply mask to bias-corrected image
     m_vol = spm_vol(fullfile(folder, ['m' name '.nii']));
@@ -65,7 +70,44 @@ function normalize(nii)
     matlabbatch2{1}.spm.spatial.normalise.write.woptions.prefix = 'w';
   
     spm_jobman('run', matlabbatch2);
+
+    % --- 6. Handle background 
+
+    % Warp the brain mask using nearest neighbour
+    matlabbatch{3}.spm.spatial.normalise.write.subj.def = {y_field};
+    matlabbatch{3}.spm.spatial.normalise.write.subj.resample = {fullfile(folder, ['brain_mask_' name '.nii'])};
+    matlabbatch{3}.spm.spatial.normalise.write.woptions.interp = 0; % Nearest neighbor
+    matlabbatch{3}.spm.spatial.normalise.write.woptions.prefix = 'w';
+    spm_jobman('run', matlabbatch(3));
+
+    % Load and the warped combined mask
+    w_mask = spm_read_vols(spm_vol(fullfile(folder, ['wbrain_mask_' name '.nii'])));
+    w_mask = w_mask > 0.5; % Re-binarize
+
+    %Load normalised image
+    w_img = spm_read_vols(spm_vol(fullfile(folder, ['wmasked_' name '.nii'])));
+
+    % Clean artifacts aggressively
+    w_img(isnan(w_img)) = 0;
+    w_img(~w_mask) = 0;
+
+    % Remove residual artifacts (SPM's "shadow" values)
+    artifact_mask = (w_img > 0) & ~w_mask;
+    w_img(artifact_mask) = 0;
+    
+    % Set negative values to 0
+    w_img(w_img < 0) = 0;
+
+    % 0-1  normalization
+    w_img_max = max(w_img(:));
+    w_img = w_img  ./ (w_img_max+ eps);
+
+    % Save final clean image
+    w_vol = spm_vol(fullfile(folder, ['wmasked_' name '.nii'])); % Borrow header
+    w_vol.fname = fullfile(folder, ['clean_' name '.nii']);
+    spm_write_vol(w_vol, w_img);
   
+
     fprintf('Finished preprocessing: %s\n', nii);
   end
   

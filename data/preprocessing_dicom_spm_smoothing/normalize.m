@@ -1,9 +1,8 @@
 function normalize(nii)
-    
   
-    % SPM and template paths
-    spm_path = '/project/aereditato/cestari/spm/spm'
-    tpm_path = '/project/aereditato/cestari/spm/spm/tpm/TPM.nii';
+    %Get spm path from environment
+    spm_path = getenv("SPM_PATH");
+    tpm_path = spm_path + "" + "/tpm/TPM.nii";
     
     addpath(spm_path);
     spm('Defaults','FMRI');

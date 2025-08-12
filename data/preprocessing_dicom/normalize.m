@@ -2,8 +2,12 @@ function normalize(nii)
   % normalize_one  Normalize a single .nii file using SPM12
   % Usage: normalize_one('/path/to/file.nii');
   
+  %Get spm path from environment
+  spm_path = getenv("SPM_PATH");
+  tpm_path = spm_path + "" + "/tpm/TPM.nii";
+
   % Add SPM path
-  addpath('/project/aereditato/cestari/spm/spm');
+  addpath(spm_path);
   
   % Initialize SPM
   spm('Defaults','FMRI');
@@ -22,7 +26,7 @@ function normalize(nii)
   % Estimation options
   matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.biasreg  = 0.0001;
   matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.biasfwhm = 60;
-  matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.tpm     = { '/project/aereditato/cestari/spm/spm/tpm/TPM.nii' };
+  matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.tpm     = { tpm_path };
   matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.affreg  = 'mni';
   matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.reg     = [0 0 0.1 0.01 0.4];
   matlabbatch{1}.spm.spatial.normalise.estwrite.eoptions.fwhm    = 0;

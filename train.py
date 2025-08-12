@@ -7,10 +7,12 @@ import yaml
 import datetime
 import argparse
 
+from inspect import getfile
+from models.registry import get_model
 from omegaconf import OmegaConf
 
 # Path to default config file
-DEFAULT_CONFIG_PATH = '/project/aereditato/cestari/adni-mri-classification/configs/training/default.yaml'
+DEFAULT_CONFIG_PATH = './configs/training/default.yaml'
 
 def train_and_evaluate(cfg_path, exp_dir=None):
     import torch
@@ -20,7 +22,6 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     import pandas as pd
     import matplotlib.pyplot as plt
     from sklearn.metrics import classification_report, confusion_matrix
-    from models.registry import get_model
     from data.datasets import ADNIDataset
     from data.augmentation import build_augmentation, random_crop
 
@@ -43,6 +44,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     optim_name  = optim_cfg.get('name', 'adam')
     lr          = float(optim_cfg.get('lr', 1e-5))
     weight_decay= float(optim_cfg.get('weight_decay', 0))
+    patience = int(optim_cfg.get('patience',-1))
 
     scheduler_cfg     = cfg.training.get('scheduler', {})
     
@@ -77,7 +79,10 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     print(f"LR min: {scheduler_lr_min}")
     print(f"T-max: {scheduler_t_max}")
     print("> Data: ")
-    print(f"Augmentation transforms: {aug_transform.transforms}")
+    if aug_transform != None:
+        print(f"Augmentation transforms: {aug_transform.transforms}")
+    else:
+        print(f"Augmentation: None")
     print(f"Oversample: {oversample}")
     
     
@@ -90,7 +95,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     dataset_tv     = ADNIDataset(trainval_csv, transform=None)
     dataset_test   = ADNIDataset(test_csv,     transform=None)
 
-    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # Prepare indices and labels for splitting
     labels  = dataset_tv.labels()
@@ -144,12 +149,12 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
             
             # Create train loader
-            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler)
+            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler, num_workers=4, pin_memory=True)
         
         else:
-            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True)
+            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
         
-        val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False)
+        val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
         # Initialize model, loss, optimizer
         ModelClass = get_model(model_name)
@@ -193,6 +198,9 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         best_epoch = 0
         train_losses, val_losses = [], []
 
+        # Initialize patience counter
+        patience_counter = 0
+        
         # Training loop
         for epoch in range(1, epochs+1):
             model.train()
@@ -202,6 +210,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
                 optimizer.zero_grad()
                 out = model(imgs)
                 loss = criterion(out, lbls)
+                #loss = criterion(out, lbls) + 0.0001*model.cbam_out.abs().mean()
                 loss.backward()
                 optimizer.step()
                 if use_scheduler and scheduler_name == 'OneCycleLR':
@@ -238,7 +247,16 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             if avg_val < best_val_loss:
                 best_val_loss = avg_val
                 best_epoch = epoch
-                torch.save(model.state_dict(), os.path.join(fold_dir, 'best_model.pth'))
+                torch.save(model, os.path.join(fold_dir, 'best_model.pth'))
+                
+                # Set patience counter to 0
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            # If patience is enabled and patience counter exceeds patience, stop training
+            if patience > 0 and patience_counter > patience:
+                break
 
         # Plot and save loss curve
         plt.figure()
@@ -252,8 +270,16 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         plt.close()
 
         # Test evaluation
-        model.load_state_dict(torch.load(os.path.join(fold_dir, 'best_model.pth')))
+        
+        # load the full model back in one step
+        model = torch.load(
+            os.path.join(fold_dir, 'best_model.pth'),
+            map_location=device,
+            weights_only=False
+        )
+        model.to(device)   # make extra-sure it’s on the right device
         model.eval()
+
         all_preds, all_lbls = [], []
         with torch.no_grad():
             for imgs, lbls in test_loader:
@@ -310,9 +336,9 @@ def submit_slurm(config_path, dir_path):
 #SBATCH --job-name={job_name}
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=15:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=4:00:00
 #SBATCH --output={log_out}
 #SBATCH --error={log_err}
 #SBATCH --account=pi-aereditato
@@ -406,6 +432,14 @@ if __name__ == '__main__':
     # Dump all configs to file
     config_path = os.path.join(exp_dir,"config.yaml")
     OmegaConf.save(cfg, config_path)
+    
+    # Dump original model file
+    model_path = getfile(get_model(cfg.model.name))
+    
+    with open(model_path, "rb") as src, open(exp_dir + '/model.py', "wb") as dst:
+        while chunk := src.read(8192):  # 8 KB buffer
+            dst.write(chunk)
+    
     
     # Dispatch
     if args.job: 

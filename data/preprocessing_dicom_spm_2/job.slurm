@@ -3,8 +3,8 @@
 #SBATCH --job-name=preprocessing_dicom
 #SBATCH --output=./logs/preprocessing_dicom_%A_%a.out
 #SBATCH --error=./logs/preprocessing_dicom_%A_%a.err
-#SBATCH --time=02:00:00
-#SBATCH --partition=caslake
+#SBATCH --time=01:30:00
+#SBATCH --partition=amd
 #SBATCH --ntasks=1
 #SBATCH --mem=4G
 #SBATCH --account=pi-aereditato
@@ -53,8 +53,8 @@ for (( i = start; i < end; i++ )); do
   # Perform SPM segmentation + bias correction (also writes deformation field)
   matlab -batch "normalize('./data/${filename}/${nii_filename}')"
 
-  # Perform z-score normalization and handle NaNs.
-  python ../../utils/intensity_normalize.py ./data/${filename}/wmasked_${nii_filename} ./data/${filename}.nii
+  # Rename file
+  mv ./data/${filename}/clean_${nii_filename} ./data/${filename}.nii
 
   # Remove subdir
   rm -rf ./data/${filename}

@@ -1,110 +1,268 @@
-# ADNI MRI Classification with 3D CNN and Grad-CAM
 
-This repository contains code for classifying Alzheimer's Disease (AD), Mild Cognitive Impairment (MCI), and Cognitively Normal (CN) subjects using preprocessed 3D MRI volumes from the ADNI dataset. It includes data preprocessing, metadata matching, model training, evaluation, and Grad-CAM visualizations for interpretability.
+# 🧠 ADNI MRI Classification
 
----
-
-## 🧠 Project Overview
-
-- **Dataset**: ADNI1/GO/2/3 3D MRI volumes (MPRAGE or equivalent T1-weighted scans)
-- **Preprocessing**: 128×128×128 volume normalization
-- **Model**: 3D CNN trained with early stopping
-- **Explainability**: Grad-CAM to visualize important brain regions
-- **Classes**: AD (Alzheimer’s), MCI (Mild Cognitive Impairment), CN (Cognitively Normal)
+Framework for training and evaluating deep learning models on the [ADNI MRI dataset](https://adni.loni.usc.edu/).  
+Supports flexible configuration, modular 3D CNN architectures, SPM-based preprocessing, and automatic experiment tracking.
 
 ---
 
-## 🔧 Environment Setup
+## 🗂️ Requirements
+- Python 3.10
+- Matlab
+- [SPM]( https://www.fil.ion.ucl.ac.uk/spm/software/spm12/ )
 
-Run the following from your RCC shell:
+---
+## 🔧 Setup Instructions
+
+### 1. Download and Unzip SPM (if not already downloaded)
+
+You need SPM12 for SPM-based preprocessing. If not already installed, download and unzip with the commands below. Change the unzip path before executing.
 
 ```bash
-module load anaconda3
-conda create -n adni_rcc python=3.10 -y
+wget -O spm.zip https://github.com/spm/spm/releases/download/25.01.02/spm_25.01.02.zip
+unzip spm.zip -d /path/to/unzip/
+```
+
+- This will create `/path/to/unzip/spm`.
+- You may change the URL to download a different release.
+- 🔗 [SPM Releases on GitHub](https://github.com/spm/spm/releases)
+
+---
+
+### 2. Open and edit `env_setup.sh`
+
+Set the correct paths and environment activation commands. Example:
+
+```bash
+# 1)  Paste below the commands to activate your environment.
+
+source /software/python-anaconda-2022.05-el8-x86_64/etc/profile.d/conda.sh
+
 conda activate adni_rcc
-pip install torch torchvision numpy pandas matplotlib nibabel scikit-learn tqdm
+module load matlab
 
+# 2) Set required environment variables
 
-## 🔧 Directory Structure
+# Absolute path to SPM12 folder (WITHOUT final /)
+export SPM_PATH="/path/to/unzip/spm"
 
-adni-mri-classification/
-├── preprocessing.py
-├── match_mri_to_diagnosis.py
-├── generate_metadata_csv.py
-├── generate_npy_metadata.py
-├── train_3dcnn.py
-├── model_3dcnn_gradcam.py
-├── gradcam_visualize.py
-├── adni_dataset.py
-├── plot_training_log.py
-├── adni_matched_nii_with_labels.csv         # Generated metadata for .nii files
-├── adni_preprocessed_npy_metadata.csv       # Metadata for .npy volumes
-├── training_log.csv                         # Saved training logs
-├── preprocessed_npy/                        # Folder containing preprocessed .npy volumes
+# Absolute path to diagnosis file DXSUM_05Apr2025.csv
+export DIAGNOSIS_FILE="/path/to/DXSUM_05Apr2025.csv"
 
-Step-by-Step Instructions
-1. Clone the repository
+```
 
-git clone https://github.com/abhatfnal/adni-mri-classification.git
-cd adni-mri-classification
-conda activate adni_rcc
+### 3. Install Python Dependencies
 
-2. Match raw .nii MRIs to ADNI diagnosis metadata
+Activate your environment using
 
-Ensure you have extracted ADNI .nii files and the DXSUM CSVs
+```bash
+source env_setup.sh
 
-python match_mri_to_diagnosis.py
+```
+Install Python requirements with:
 
-This generates adni_matched_nii_with_labels.csv.
+```bash
+pip install -r requirements.txt
+```
 
-3. Preprocess MRI .nii to .npy (128×128×128)
+---
 
-python preprocessing.py
+## 🚀 Quickstart
 
-Output saved to preprocessed_npy/.
+### 1. Activate your environment 
 
-4. Generate .npy metadata
+```bash
+source env_setup.sh
+```
 
-python generate_npy_metadata.py
+### 2. Run preprocessing
 
-This produces adni_preprocessed_npy_metadata.csv used for training.
+Open one preprocessing pipeline folder under the `data/` folder (recommended: `data/preprocessing_dicom_spm`)  and follow the instructions to produce the preprocessed data.
 
-5. Train the 3D CNN
+### 3. Run training with ResNet18 model
 
-python model_3dcnn_gradcam.py
+After having updated the paths to `trainval.csv` and `test.csv` in the desired configuation file, as described in the preprocessing instructions, from the project root directory run
 
-The model uses early stopping and saves best_3dcnn_gradcam.pth. Logs are written to training_log.csv.
+```bash 
+python train.py --config configs/training/resnet18.yaml --job
+```
 
-6. Plot training curves
+---
 
-python plot_training_log.py
+## 📁 Repository Structure
 
-Output: training_log_plot.png
+```
+├── configs/
+│   ├── schema.py              # Config schema & validation
+│   └── training/*.yaml        # Training configs
+├── data/
+│   ├── preprocessing_dicom_spm/
+│   │   ├── run.sh             # Runs SPM-based preprocessing
+│   │   └── data/*.nii, *.csv  # Output images and splits
+│   └── DXSUM_05Apr2025.csv    # ADNI subject metadata
+├── experiments/               # Logs, metrics, models per run
+├── models/                    # Custom + standard model architectures
+├── train.py                   # Training CLI
+├── utils/                     # Tools for splits, plotting, etc
+└── README.md                   # This document
+```
 
-7. Grad-CAM Visualization
+---
 
-Edit gradcam_visualize.py to set the sample index:
+## ⚙️ Configuration System
 
-idx_to_visualize = 42  # change to any value between 0 and len(dataset)-1
+YAML files under `configs/training/` define all model, data, and training settings.
 
-Then run:
+You can **merge multiple configs**, and **override any field from the CLI**.
 
-python gradcam_visualize.py
+```bash
+python train.py \
+  --config configs/training/default.yaml \
+  --config configs/training/custom_3dcnn.yaml \
+  training.epochs=300 training.optimizer.lr=1e-4
+```
 
-Output: gradcam_output.pdf
-🧪 Example Results
+### 🔢 Example Config (default.yaml)
 
-Example classification report after training:
+```yaml
+model:
+  name: resnet18
+  num_classes: 3
+  in_channels: 1
+  init_filters: 4
 
-Accuracy: 82%
-Precision/Recall/F1: ~0.83 (AD), ~0.86 (MCI), ~0.76 (CN)
+training:
+  batch_size: 8
+  epochs: 200
+  optimizer:
+    name: adam
+    lr: 1e-3
+  scheduler:
+    name: CosineAnnealingLR
+    t_max: 200
+    lr_max: 1e-3
+    lr_min: 2e-6
 
-Grad-CAM shows that the model focuses on relevant brain regions for classification.
-📌 Notes
+data:
+  trainval_csv: ./data/.../trainval.csv
+  test_csv: ./data/.../test.csv
+  augmentation:
+    random_crop:
+      p: 1
 
-    This repository assumes access to ADNI .nii scans and diagnosis metadata.
+cross_validation:
+  method: kfold
+  folds: 5
+```
 
-    Preprocessed .npy volumes are stored in preprocessed_npy/ and not version controlled.
+### 🧮 Config Reference
 
-👤 Authors
-Avinay Bhat — abhatfnal
+| Field | Description | Example |
+|-------|-------------|---------|
+| `model.name` | Model architecture | `resnet18`, `custom_3dcnn` |
+| `training.epochs` | Number of training epochs | `200` |
+| `data.trainval_csv` | Path to training CSV | `./data/.../trainval.csv` |
+| `cross_validation.method` | CV method | `kfold`, `none` |
+
+---
+
+## 🧠 Model Registry
+
+- Add a model:
+  1. Subclass `models/base.py`
+  2. Register it in `models/registry.py`
+
+Built-ins: `simple_3dcnn`, `resnet18`, `custom_3dcnn`, `simple_3dcnn_gradcam`.
+
+---
+
+## 📊 Experiment Logging
+
+Each training run creates a folder inside `experiments/`, named by timestamp or job ID.
+
+Contents include:
+- Merged YAML config
+- `losses.csv` (train/val loss)
+- `metrics.csv` (acc, AUC, precision/recall)
+- Confusion matrices
+- Model checkpoints (`.pth`)
+
+---
+
+## 🗂️ Preprocessing Pipelines
+
+Each preprocessing folder contains:
+- A `run.sh` script
+- A `data/` subfolder with:
+  - `.nii` MRI volumes
+  - `trainval.csv`, `test.csv` with labels and paths
+
+The default is `data/preprocessing_dicom_spm/`, which uses Matlab + SPM.
+
+---
+
+## 🛠️ Utilities
+
+| Script | Purpose |
+|--------|---------|
+| `train_test_split.py` | Split dataset into train/val/test |
+| `plot_training_log.py` | Plot loss/metric curves |
+| `gradcam_visualize.py` | Visualize saliency maps |
+| `plot_histogram.py` | Plot class distributions |
+
+---
+
+## 🏷️ Data Labels
+
+| Label | Description |
+|-------|-------------|
+| 1 | CN (Cognitively Normal) |
+| 2 | MCI (Mild Cognitive Impairment) |
+| 3 | AD (Alzheimer’s Disease) |
+
+Source: `DXSUM_05Apr2025.csv`
+
+---
+
+## 🧪 Example Commands
+
+### ✅ Local training with ResNet18
+
+```bash
+python train.py \
+  --config configs/training/resnet18.yaml \
+  data.trainval_csv=./data/.../trainval.csv \
+  data.test_csv=./data/.../test.csv
+```
+
+### ✅ Submit to RCC with custom overrides
+
+```bash
+python train.py \
+  --config configs/training/custom_3dcnn.yaml \
+  --job \
+  training.epochs=300 \
+  training.optimizer.lr=5e-4
+```
+
+---
+
+## 🧯 Troubleshooting
+
+| Problem | Solution |
+|--------|----------|
+| `matlab: command not found` | Ensure Matlab is installed and in PATH |
+| `SPM not found` | Check `SPM_DIR` in `env_setup.sh` |
+| `trainval.csv not found` | Run the preprocessing script to generate splits |
+| `schema validation error` | Config is missing required fields — see `schema.py` |
+
+---
+
+## 📎 Resources
+
+- [ADNI Data Portal](https://adni.loni.usc.edu/)
+- [SPM12 Releases](https://github.com/spm/spm/releases)
+
+---
+
+For questions or contributions, please open an issue or pull request.

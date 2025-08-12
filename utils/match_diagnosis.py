@@ -1,14 +1,11 @@
 """
-Compute ./data/datatset.csv file.
-Contains paths to scans and its respective diagnosis.
+Matches scans in --scan-dir to temporally closest diagnosis 
+in --diagnosis-file, using dates stripped from filenames.
+Creates dataset.csv in --scan-dir.
 """
-import os
-import re
-import sys
-import pandas as pd
-import argparse
 
-from datetime import datetime
+import sys
+import argparse
 
 def parse_filename(filename):
     """
@@ -21,6 +18,9 @@ def parse_filename(filename):
     dict: A dictionary containing 'patient_id', 'date'
     """
 
+    import re
+    from datetime import datetime
+    
     m = re.match(r'^ADNI_(?P<id>\d+_S_\d+)_.*?_(?P<date>\d{4}-\d{2}-\d{2})', filename)
     if m:
         patient_id = m.group('id')
@@ -36,6 +36,9 @@ def compute_labels(diagnosis_file, img_dir):
     Get list of (patient_id,date) then matches with temporally closest diagnosis and image absolute path.
     Dumps data in img_dir/dataset.csv.
     """
+    import os
+    import pandas as pd
+    
     try:
 
         # file names
@@ -98,13 +101,16 @@ def compute_labels(diagnosis_file, img_dir):
 
 if __name__ == "__main__":
     
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="""
+        Matches scans in --scan-dir to temporally closest diagnosis 
+        in --diagnosis-file, using dates stripped from scans filenames.
+        Creates dataset.csv in --scan-dir.""")
     
-    parser.add_argument('diagnosis_file')
-    parser.add_argument('img_dir')
+    parser.add_argument('--diagnosis-file', required=True)
+    parser.add_argument('--scan-dir', required=True)
     
     args = parser.parse_args(sys.argv[1:])
     
-    compute_labels(args.diagnosis_file, args.img_dir)
+    compute_labels(args.diagnosis_file, args.scan_dir)
     
     

@@ -1,21 +1,21 @@
 model:
-  name: resnet18
+  name: resnet14
   num_classes: 3
   in_channels: 1
   init_filters: 4
 
 training:
   batch_size: 8
-  epochs: 200
+  epochs: 100
   optimizer:
     name: 'adam'
-    lr: 1e-3
     weight_decay: 0
+    lr: 1e-4
   scheduler:
     name: 'CosineAnnealingLR'
-    t_max: 200
-    lr_max: 1e-3
-    lr_min: 1e-4
+    t_max: 100
+    lr_max: 1e-4
+    lr_min: 2e-6
 
 data:
   trainval_csv: '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm_2/data/trainval.csv'     
@@ -26,8 +26,8 @@ data:
     random_affine:
       p: 0.3
       degrees: 0
-      translation: 5
+      translation: 10
 
 cross_validation:
-  method: kfold
-  folds: 5
+  method: holdout
+  val_fraction: 0.2
