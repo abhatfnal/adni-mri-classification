@@ -159,7 +159,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         # Initialize model, loss, optimizer
         ModelClass = get_model(model_name)
         model = ModelClass(model_cfg).to(device)
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss()     
 
         if optim_name == 'adamw':
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)

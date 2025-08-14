@@ -49,13 +49,16 @@ def random_crop(
     return resized.squeeze(0)  # (C, D, H, W) on original device
 
 
-def build_augmentation(cfg: dict) -> tio.Compose:
+def build_augmentation(cfg: list) -> tio.Compose:
     """
     Build a torchio Compose where each transform
     takes & returns a torch.Tensor.
     """
     transforms = []
-    for name, params in cfg.items():
+    for d in cfg:
+        name = list(d.keys())[0]
+        params = d.get(name, {})
+        
         if name == 'random_crop':
             transforms.append(
                 tio.Lambda(

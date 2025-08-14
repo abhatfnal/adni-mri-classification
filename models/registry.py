@@ -6,6 +6,9 @@ from .model_resnet18 import ResNet18
 from .model_resnet14 import ResNet14
 from .model_mynet import MyNet
 from .model_mynet2 import MyNet2
+from .model_newnet import NewNet
+from .model_net import Net
+from .model_xresnet import XResNet
 
 _MODEL_REGISTRY = {
                     'simple_3dcnn':Simple3DCNN,
@@ -15,6 +18,9 @@ _MODEL_REGISTRY = {
                     'resnet14':ResNet14,
                     'mynet':MyNet,
                     'mynet2':MyNet2,
+                    'newnet':NewNet,
+                    'net':Net,
+                    'xresnet':XResNet,
                   }
 
 # Returns model's class given the model's name
