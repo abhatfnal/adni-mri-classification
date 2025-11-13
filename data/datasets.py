@@ -16,8 +16,14 @@ class ADNIDataset(Dataset):
         self.transform = transform
         
         # Keep only relevant diagnoses and create labels
+        # self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
+        # self.data['label'] = self.data['diagnosis'].astype(int) - 1
+        
+        # Keep only relevant diagnoses and create labels
         self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
-        self.data['label'] = self.data['diagnosis'].astype(int) - 1
+        unique_diagnoses = sorted(self.data['diagnosis'].unique())
+        diag_to_label = {diag: i for i, diag in enumerate(unique_diagnoses)}
+        self.data['label'] = self.data['diagnosis'].map(diag_to_label)
 
     def __len__(self):
         return len(self.data)
@@ -36,3 +42,6 @@ class ADNIDataset(Dataset):
     
     def labels(self):
         return self.data['label'].astype(int).tolist()
+    
+    def groups(self):
+        return self.data['rid'].astype(int).tolist()

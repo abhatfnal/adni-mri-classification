@@ -23,7 +23,10 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     import matplotlib.pyplot as plt
     from sklearn.metrics import classification_report, confusion_matrix
     from data.datasets import ADNIDataset
-    from data.augmentation import build_augmentation, random_crop
+    from data.augmentation import build_augmentation, random_crop, cutmix_3d, mixup_3d, cutout_3d
+    from torchvision.transforms import v2
+    from sklearn.model_selection import StratifiedGroupKFold
+    import numpy as np
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -39,6 +42,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     seed        = int(cfg.cross_validation.get('seed', 42))
     epochs      = int(cfg.training.epochs)
     batch_size  = int(cfg.training.batch_size)
+    loss_type = cfg.training.get('loss', 'cross_entropy')
+    num_classes = int(cfg.model.get('num_classes', 3))
 
     optim_cfg   = cfg.training.get('optimizer', {})
     optim_name  = optim_cfg.get('name', 'adam')
@@ -57,8 +62,18 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     model_cfg  = cfg.model
     model_name = str(model_cfg.name)
     
-    aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
     oversample = bool(cfg.data.get('oversample', False))
+    
+    mixup_cfg = cfg.data.get('mixup',{})
+    use_mixup = mixup_cfg != {}
+    
+    cutout_cfg = cfg.data.get('cutout',{})
+    use_cutout = cutout_cfg != {}
+    
+    cutmix_cfg = cfg.data.get('cutmix', {})
+    use_cutmix = cutmix_cfg != {}
+    
+    aug_transform = build_augmentation(cfg.data.augmentation) if cfg.data.augmentation != {} else None
     
     # Print settings
     print("======|| Configuration ||======")
@@ -84,14 +99,17 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     else:
         print(f"Augmentation: None")
     print(f"Oversample: {oversample}")
-    
+    print(f"Mixup: {use_mixup}")
+    print(f"Cutout: {use_cutout}")
+    print(f"Cutmix: {use_cutmix}")
+
     
     # Data CSVs
     trainval_csv = cfg.data.trainval_csv
     test_csv     = cfg.data.test_csv
 
     # Build datasets: trainval augmented and no-augmentation, plus fixed test
-    dataset_tv_aug = ADNIDataset(trainval_csv, transform=aug_transform)
+    dataset_tv_aug = ADNIDataset(trainval_csv, transform=aug_transform) 
     dataset_tv     = ADNIDataset(trainval_csv, transform=None)
     dataset_test   = ADNIDataset(test_csv,     transform=None)
 
@@ -100,26 +118,39 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     # Prepare indices and labels for splitting
     labels  = dataset_tv.labels()
     indices = list(range(len(dataset_tv)))
+    groups  = dataset_tv.groups()
     method = cfg.cross_validation.get('method', 'kfold')
     seed   = int(cfg.cross_validation.get('seed', 42))
 
+    # Create splits / folds 
     if method == 'kfold':
-        from sklearn.model_selection import StratifiedKFold
+        
         n_splits = int(cfg.cross_validation.folds)
-        splitter = StratifiedKFold(
+        splitter = StratifiedGroupKFold(
             n_splits=n_splits,
             shuffle=True,
             random_state=seed,
         )
         
+        splits = [(fold, (train_idx, val_idx)) for fold, (train_idx, val_idx) in enumerate(
+            splitter.split(indices, labels, groups), start=1)]
+        
     elif method == 'holdout':
-        from sklearn.model_selection import StratifiedShuffleSplit
+        
         val_frac = float(cfg.cross_validation.val_fraction)
-        splitter = StratifiedShuffleSplit(
-            n_splits=1,
-            test_size=val_frac,
+        splitter = StratifiedGroupKFold(
+            n_splits=int(1/val_frac), # Approximate hold-out via KFold
+            shuffle=True,
             random_state=seed,
         )
+        
+        # Get splits
+        splits = [(fold, (train_idx, val_idx)) for fold, (train_idx, val_idx) in enumerate(
+            splitter.split(indices, labels, groups), start=1)]
+        
+        # Just take the first (and only) split
+        splits = [splits[0]]
+        
     else:
         raise ValueError(f"Unknown split method: {method!r}")
 
@@ -128,8 +159,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     cms = []
     
     # Loop over folds
-    for fold, (train_idx, val_idx) in enumerate(splitter.split(indices, labels), start=1):
-        print(f"\n===== Fold {fold}/{splitter.get_n_splits()} =====")
+    for fold, (train_idx, val_idx) in splits:
+        print(f"\n===== Fold {fold}/{len(splits)} =====")
 
         # Subsets
         train_set = Subset(dataset_tv_aug, train_idx)
@@ -149,7 +180,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
             
             # Create train loader
-            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler, num_workers=4, pin_memory=True)
+            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=False, sampler=sampler, num_workers=4, pin_memory=True)
         
         else:
             train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
@@ -159,7 +190,28 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         # Initialize model, loss, optimizer
         ModelClass = get_model(model_name)
         model = ModelClass(model_cfg).to(device)
-        criterion = nn.CrossEntropyLoss()     
+        
+        # Load previously trained model (transfer learning)
+        #model = torch.load('./experiments/agxresnet_20250825_205539/fold_1/best_model.pth', weights_only=False, map_location=torch.device('cuda'))
+       
+        # Compute class weights for the CURRENT FOLD's training data
+        
+        if loss_type == 'cross_entropy':
+            train_labels = np.array(labels)[train_idx]
+            class_counts = torch.bincount(torch.tensor(train_labels))
+            class_weights = 1.0 / class_counts.float()
+            class_weights = class_weights / class_weights.sum()  # normalize to sum to 1
+            class_weights = class_weights.to(device)
+            print(f"Using class weights (Fold {fold}): {class_weights.cpu().numpy()}")
+            
+            # Define weighted loss
+            criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+        elif loss_type == 'bce':
+            criterion = nn.BCEWithLogitsLoss()
+            
+        else:
+            raise ValueError(f"Unknown loss function: {loss_type!r}")
 
         if optim_name == 'adamw':
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -207,10 +259,31 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             running_train = 0.0
             for imgs, lbls in train_loader:
                 imgs, lbls = imgs.to(device), lbls.to(device)
+                    
+                # Use mixup if enabled
+                if use_mixup:
+                    if torch.rand(()) < mixup_cfg.get('p',0.5):
+                        imgs, lbls, perm, lam = mixup_3d(imgs, lbls, num_classes=num_classes,alpha=mixup_cfg.get('alpha',0.3))
+                        
+                # Use cutout if enabled
+                if use_cutout:
+                    if torch.rand(()) < cutout_cfg.get('p',0.5):
+                        imgs = cutout_3d(imgs, 2, 0.05, fill="zero", return_mask=False)
+                        
+                # Use cutmix if enabled:
+                if use_cutmix:
+                    if torch.rand(()) < cutmix_cfg.get('p',0.5):
+                        imgs, lbls, perm, lam = cutmix_3d(imgs, lbls, num_classes=num_classes, alpha=cutmix_cfg.get('alpha',1.0), same_class=True)
+
                 optimizer.zero_grad()
                 out = model(imgs)
-                loss = criterion(out, lbls)
-                #loss = criterion(out, lbls) + 0.0001*model.cbam_out.abs().mean()
+
+                if loss_type == "bce":
+                    targets = torch.stack([1 - lbls, lbls], dim=1).float()  # (B, 2), CN, AD one-hot
+                    loss = criterion(out, targets)
+                elif loss_type == "cross_entropy":
+                    loss = criterion(out, lbls)
+                
                 loss.backward()
                 optimizer.step()
                 if use_scheduler and scheduler_name == 'OneCycleLR':
@@ -260,8 +333,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
 
         # Plot and save loss curve
         plt.figure()
-        plt.plot(range(1, epochs+1), train_losses, label='Train')
-        plt.plot(range(1, epochs+1), val_losses,   label='Val')
+        plt.plot([i for i in range(1, len(train_losses)+1)], train_losses, label='Train')
+        plt.plot([i for i in range(1, len(val_losses)+1)], val_losses,   label='Val')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.title(f'Fold {fold} Loss Curve')
@@ -338,7 +411,7 @@ def submit_slurm(config_path, dir_path):
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#SBATCH --time=4:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output={log_out}
 #SBATCH --error={log_err}
 #SBATCH --account=pi-aereditato
@@ -439,7 +512,11 @@ if __name__ == '__main__':
     with open(model_path, "rb") as src, open(exp_dir + '/model.py', "wb") as dst:
         while chunk := src.read(8192):  # 8 KB buffer
             dst.write(chunk)
-    
+            
+    # Dump training file (this file)
+    with open(__file__, "rb") as src, open(exp_dir + '/train.py', "wb") as dst:
+        while chunk := src.read(8192):  # 8 KB buffer
+            dst.write(chunk)
     
     # Dispatch
     if args.job: 

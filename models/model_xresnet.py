@@ -6,23 +6,23 @@ import torch.nn.functional as F
 from .base import BaseModel
 
 
-class StdNorm3d(nn.Module):
-    def __init__(self, eps=1e-6, floor=1e-2):
-        super().__init__()
-        self.eps, self.floor = eps, floor
-    def forward(self, x):
-        std = x.pow(2).mean(dim=(2,3,4), keepdim=True).add(self.eps).sqrt()
-        std = std.clamp_min(self.floor)   # robust floor
-        return x / std
+# class StdNorm3d(nn.Module):
+#     def __init__(self, eps=1e-6, floor=1e-2):
+#         super().__init__()
+#         self.eps, self.floor = eps, floor
+#     def forward(self, x):
+#         std = x.pow(2).mean(dim=(2,3,4), keepdim=True).add(self.eps).sqrt()
+#         std = std.clamp_min(self.floor)   # robust floor
+#         return x / std
 
 class ChannelAttention3D(nn.Module):
     def __init__(self, channels, reduction=8):
         super().__init__()
         hidden = max(4, channels // reduction)
         self.mlp = nn.Sequential(
-            nn.Linear(channels, hidden, bias=False),
+            nn.Linear(channels, hidden),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden, channels, bias=False)
+            nn.Linear(hidden, channels)
         )
         self.gap_out = None
 
@@ -38,7 +38,7 @@ class SpatialAttention3d(nn.Module):
         super().__init__()
         pad = kernel_size // 2
         # compress channel dim with avg+max, then conv
-        self.conv = nn.Conv3d(2, 1, kernel_size=kernel_size, padding=pad, bias=False)
+        self.conv = nn.Conv3d(2, 1, kernel_size=kernel_size, padding=pad)
 
     def forward(self, x):
         avg_map = torch.mean(x, dim=1, keepdim=True)
@@ -64,16 +64,16 @@ class ResidualBlock(nn.Module):
         super().__init__()
         
         self.residual = nn.Sequential(
-            nn.Conv3d(in_channels, out_channels, 3, padding=3//2, bias=False),
-            StdNorm3d(),
+            nn.Conv3d(in_channels, out_channels, 3, padding=3//2),
+            nn.InstanceNorm3d(out_channels),
             nn.ReLU(),
-            nn.Conv3d( out_channels, out_channels, 3, padding=3//2, bias=False),
-            StdNorm3d(),
+            nn.Conv3d( out_channels, out_channels, 3, padding=3//2),
+            nn.InstanceNorm3d(out_channels),
             SpatialAttention3d()
         )
         
         self.shortcut = (
-            nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False)
+            nn.Conv3d(in_channels, out_channels, kernel_size=1)
             if in_channels != out_channels else nn.Identity()
         )
         
@@ -107,8 +107,8 @@ class XResNet(BaseModel):
         
         # initial block
         self.initial_block = nn.Sequential(
-            nn.Conv3d(1, initial_filters, 7, padding=7//2, bias=False),
-            StdNorm3d(),
+            nn.Conv3d(1, initial_filters, 7, padding=7//2),
+            nn.InstanceNorm3d(initial_filters),
             nn.ReLU()
         ) 
         self.pool1 = nn.MaxPool3d(2)            

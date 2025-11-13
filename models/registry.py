@@ -5,10 +5,8 @@ from .model_simple_3dcnn_gradcam import GradCAM3DCNN
 from .model_resnet18 import ResNet18
 from .model_resnet14 import ResNet14
 from .model_mynet import MyNet
-from .model_mynet2 import MyNet2
-from .model_newnet import NewNet
-from .model_net import Net
 from .model_xresnet import XResNet
+from .model_agxresnet import AGXResNet
 
 _MODEL_REGISTRY = {
                     'simple_3dcnn':Simple3DCNN,
@@ -17,10 +15,8 @@ _MODEL_REGISTRY = {
                     'resnet18':ResNet18,
                     'resnet14':ResNet14,
                     'mynet':MyNet,
-                    'mynet2':MyNet2,
-                    'newnet':NewNet,
-                    'net':Net,
                     'xresnet':XResNet,
+                    'agxresnet': AGXResNet,
                   }
 
 # Returns model's class given the model's name

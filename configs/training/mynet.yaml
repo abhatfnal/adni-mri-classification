@@ -1,30 +1,40 @@
-training:
-  batch_size: 8
-  epochs: 400
-  optimizer:
-    name: adam
-    weight_decay: 0
-    lr: 0.001
-    patience: 50
-  scheduler:
-    name: CosineAnnealingLR
-    t_max: 400
-    lr_max: 0.001
-    lr_min: 2.0e-06
-data:
-  trainval_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm_2/data/trainval.csv
-  test_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_dicom_spm_2/data/test.csv
-  augmentation:
-    random_flip:
-      p: 0.5
-    random_affine:
-      degrees: 0
-      translation: 5
-      p: 0.3
-cross_validation:
-  method: holdout
-  folds: 5
-  val_fraction: 0.2
-  seed: 42
 model:
   name: mynet
+  num_classes: 2
+  in_channels: 1
+  init_filters: 4
+
+training:
+  batch_size: 16
+  epochs: 150
+  loss: bce
+  optimizer:
+    name: adamw
+    weight_decay: 0.01
+    lr: 0.0001
+    patience: 10
+  scheduler:
+    name: CosineAnnealingLR
+    t_max: 150
+    lr_max: 0.001
+    lr_min: 1.0e-06
+data:
+  trainval_csv: /project/aereditato/abhat/adni-mri-classification/data/preprocessing_dicom_spm_2/trainval_CN_vs_AD.csv
+  test_csv: /project/aereditato/abhat/adni-mri-classification/data/preprocessing_dicom_spm_2/test_CN_vs_AD.csv
+  augmentation:
+    - random_flip:
+        p: 0.5
+    - random_affine:
+        p: 0.5
+        degrees: 5
+        translation: 5
+    - random_noise:
+        p: 0.2
+        std: 0.02
+  oversample: true
+cross_validation:
+  method: kfold
+  folds: 3
+  val_fraction: 0.2
+  seed: 42
+
