@@ -17,6 +17,7 @@ __pycache__/
 *.npy
 *.out
 *.err
+*.mat
 
 # Experiments
 experiments/*
@@ -26,6 +27,7 @@ experiments/*
 *.dcm
 data/*/data/*
 data/raw
+*.zip
 
 # Jupyter
 .ipynb_checkpoints/

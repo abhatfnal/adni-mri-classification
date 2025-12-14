@@ -83,6 +83,7 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     print("> General: ")
     print(f"Epochs: {epochs}")
     print(f"Batch size: {batch_size}")
+    print(f"Loss: {loss_type}")
     print(f"Seed: {seed}")
     print("> Optimizer: ")
     print(f"Name: {optim_name}")
@@ -194,9 +195,11 @@ def train_and_evaluate(cfg_path, exp_dir=None):
         # Load previously trained model (transfer learning)
         #model = torch.load('./experiments/agxresnet_20250825_205539/fold_1/best_model.pth', weights_only=False, map_location=torch.device('cuda'))
        
-        # Compute class weights for the CURRENT FOLD's training data
+        
         
         if loss_type == 'cross_entropy':
+            
+            # Compute class weights for the CURRENT FOLD's training data
             train_labels = np.array(labels)[train_idx]
             class_counts = torch.bincount(torch.tensor(train_labels))
             class_weights = 1.0 / class_counts.float()
@@ -276,13 +279,10 @@ def train_and_evaluate(cfg_path, exp_dir=None):
                         imgs, lbls, perm, lam = cutmix_3d(imgs, lbls, num_classes=num_classes, alpha=cutmix_cfg.get('alpha',1.0), same_class=True)
 
                 optimizer.zero_grad()
-                out = model(imgs)
+                out = model(imgs).squeeze(1)
 
-                if loss_type == "bce":
-                    targets = torch.stack([1 - lbls, lbls], dim=1).float()  # (B, 2), CN, AD one-hot
-                    loss = criterion(out, targets)
-                elif loss_type == "cross_entropy":
-                    loss = criterion(out, lbls)
+                
+                loss = criterion(out, lbls.float())
                 
                 loss.backward()
                 optimizer.step()
@@ -298,8 +298,9 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             with torch.no_grad():
                 for imgs, lbls in val_loader:
                     imgs, lbls = imgs.to(device), lbls.to(device)
-                    out = model(imgs)
-                    running_val += criterion(out, lbls).item()
+                    out = model(imgs).squeeze(1)
+                    
+                    running_val += criterion(out, lbls.float()).item()
             avg_val = running_val / len(val_loader)
             val_losses.append(avg_val)
 
@@ -358,7 +359,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
             for imgs, lbls in test_loader:
                 imgs, lbls = imgs.to(device), lbls.to(device)
                 out = model(imgs)
-                preds = out.argmax(dim=1)
+                #preds = out.argmax(dim=1)
+                preds = torch.round(torch.sigmoid(out)).squeeze(1)
                 all_preds.extend(preds.cpu().numpy())
                 all_lbls.extend(lbls.cpu().numpy())
 

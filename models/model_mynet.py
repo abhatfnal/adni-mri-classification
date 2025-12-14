@@ -133,15 +133,12 @@ class Block(nn.Module):
     def forward(self, x):
         return self.seq(x)
 
-
 class MyNet(BaseModel):
     def _build(self):
-        
-        # --- config ---
-        num_classes = 2   # AD vs CN
-        F0 = int(self.cfg.get('init_filters', 4))
+        num_classes     = int(self.cfg.get('num_classes', 3))
+        F0              = int(self.cfg.get('init_filters', 4))
+        C_feat = 16
 
-        # --- shared backbone  ---
         self.initial_block = nn.Sequential(
             nn.Conv3d(1, F0, 7, padding=3),
             nn.InstanceNorm3d(F0),
@@ -149,56 +146,34 @@ class MyNet(BaseModel):
         )
         self.pool1 = nn.MaxPool3d(2)
 
-        self.b1    = Block(F0,   2 * F0)
-        self.b2    = Block(2*F0, 4 * F0)
+        self.b1    = Block(F0,   2*F0)   # -> 2F
+        self.b2    = Block(2*F0, 4*F0)   # -> 2F
         self.pool2 = nn.MaxPool3d(2)
 
-        self.b3    = Block(4*F0, 8 * F0)
+        self.b3    = Block(4*F0, 8*F0)   # -> 4F
+        self.b4    = Block(8*F0, C_feat)   # -> 8F
 
-        # --- last conv block: shared feature extractor, not class-specific ---
-        C_feat = 8 * F0
-        self.b4_feat = Block(8*F0, C_feat)
-
-        # global average pooling to vector
-        self.gap = nn.AdaptiveAvgPool3d(1)
-
-        # --- custom classifier with POSITIVE weights ---
-        # raw weights (can be negative), we'll map them through softplus
-        self.fc_weight_raw = nn.Parameter(torch.randn(num_classes, C_feat))
-        self.fc_bias       = nn.Parameter(torch.zeros(num_classes))
-
-    def forward(self, x):
+        self.gap = nn.AdaptiveMaxPool3d(1)  # global max pooling
+        self.fc = nn.Linear(C_feat, 1)
         
-        # shared backbone
+    def forward(self, x):
         x  = self.pool1(self.initial_block(x))
-        x1 = self.b1(x)
-        x2 = self.pool2(self.b2(x1))
-        x3 = self.b3(x2)
 
-        # shared deep feature maps
-        fm = self.b4_feat(x3)              # (B, C_feat, D, H, W)
-        self.feature_maps = fm             # for inspection if you want
+        x1 = self.b1(x)                   
+        x2 = self.pool2(self.b2(x1))                  
+        x3 = self.b3(x2)          
+        self.feature_maps = self.b4(x3)
 
-        # pooled feature vector
-        pooled = self.gap(fm).view(x.size(0), -1)  # (B, C_feat)
+        x4 = self.gap(self.feature_maps)
+        x5 = x4.view(x4.size(0), -1)
+        
+        return self.fc(x5)
 
-        # enforce positive classifier weights via softplus
-        w_pos = F.softplus(self.fc_weight_raw)      # (2, C_feat), all > 0
-
-        # logits for 2 independent heads (AD, CN)
-        logits = pooled @ w_pos.t() + self.fc_bias  # (B, 2)
-
-        # ----- class-specific maps for interpretability & orthogonality -----
-        # class_maps[b, k, d, h, w] = sum_c w_pos[k, c] * fm[b, c, d, h, w]
-        # shape: (B, 2, D, H, W)
-        self.class_maps = torch.einsum('bcxyz,kc->bkxyz', fm, w_pos)
-
-        return logits  # logits[:, 0] = CN head, logits[:, 1] = AD head
 
 if __name__ == "__main__":
 
     model = MyNet({})
     print(model)
-    sample = torch.randn(1, 1, 79, 95, 79)
+    sample = torch.randn(10, 1, 79, 95, 79)
     out = model(sample)
     print(out.shape)
