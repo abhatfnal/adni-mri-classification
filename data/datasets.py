@@ -2,6 +2,7 @@ import torch
 import pandas as pd
 import nibabel as nib
 import numpy as np
+import os
 
 from torch.utils.data import Dataset
 
@@ -10,19 +11,22 @@ class ADNIDataset(Dataset):
     ADNI dataset class
     """
         
-    def __init__(self, csv_file, transform=None):
+    def __init__(self, csv_file, classes=[1,2,3], transform=None):
         
-        self.data = pd.read_csv(csv_file)
         self.transform = transform
         
-        # Keep only relevant diagnoses and create labels
-        # self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
-        # self.data['label'] = self.data['diagnosis'].astype(int) - 1
+        # Read csv
+        self.data = pd.read_csv(csv_file)
         
-        # Keep only relevant diagnoses and create labels
-        self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
-        unique_diagnoses = sorted(self.data['diagnosis'].unique())
-        diag_to_label = {diag: i for i, diag in enumerate(unique_diagnoses)}
+        # Only keep rows with existing files
+        self.data = self.data[ self.data['filepath'].apply( lambda x : os.path.exists(x))]
+        
+        # Only keep requested diagnoses
+        self.data = self.data[self.data['diagnosis'].isin(classes)].copy()
+
+        # Map them to 0, ... , |classes|
+        diag_to_label = {diag: i for i, diag in enumerate(classes)}
+
         self.data['label'] = self.data['diagnosis'].map(diag_to_label)
 
     def __len__(self):
@@ -44,4 +48,12 @@ class ADNIDataset(Dataset):
         return self.data['label'].astype(int).tolist()
     
     def groups(self):
-        return self.data['rid'].astype(int).tolist()
+        return self.data['ptid'].astype(str).tolist()
+    
+if __name__ == "__main__":
+    
+    dataset = ADNIDataset(
+        csv_file="/project/aereditato/cestari/adni-mri-classification/data/preprocessing_mri_pet/datasets/dataset_unimodal_mri_trainval.csv")
+    
+    index = 20
+    print(dataset[index][0].shape)

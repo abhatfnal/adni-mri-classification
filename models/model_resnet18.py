@@ -117,8 +117,7 @@ class ResNet18(BaseModel):
         # Configuration
         num_classes  = int(self.cfg.get('num_classes', 3))
         initial_filters = int(self.cfg.get('init_filters', 8))
-        input_shape  = tuple(self.cfg.get('input_shape', (1, 128, 128, 128))) # (C, D, H, W)
-        
+        dropout = float(self.cfg.get('dropout', 0))
         avgpool_kernel_size = 2
         
         # initial block
@@ -145,9 +144,11 @@ class ResNet18(BaseModel):
         # avg pool
         self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: ? (initial_filters*8, floor(D/32), floor(H/32), floor(W/32))
         
+        # Dropout layer
+        self.dropout = nn.Dropout(dropout)
         
-        # final fc layer (hardcoded dims)
-        self.fc1 = nn.Linear(384, num_classes)
+        # final fc layer (hardcoded dims) 384 for input size 79*95*79, 1728 for input size 91*109*91
+        self.fc1 = nn.Linear(1728, num_classes)
         
     def forward(self, x):
         
@@ -162,12 +163,14 @@ class ResNet18(BaseModel):
         
         x = x.view(x.size(0), -1)
         
+        x = self.dropout(x)
+        
         return self.fc1(x)
     
 if __name__ == "__main__":
     
-    model = ResNet18({})
+    model = ResNet18({"dropout":0.5})
     print(model)
-    sample = torch.randn(1, 1, 79, 95, 79)
+    sample = torch.randn(1, 1, 91, 109, 91)
     out = model(sample)
     print(out.shape)

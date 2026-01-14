@@ -33,7 +33,7 @@ if __name__ == "__main__":
         
         # Get labels and groups
         labels = df['diagnosis'].astype(int).tolist()
-        groups = df['rid'].astype(str).tolist()
+        groups = df['ptid'].astype(str).tolist()
         
         # Get random state if specified
         random_state = int(args.r) if args.r else 42
