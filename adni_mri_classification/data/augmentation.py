@@ -3,6 +3,19 @@ import torch.nn.functional as F
 
 import torchio as tio
 
+
+class Augmentation():
+    
+    def __init__(self, config):
+        pass 
+    
+    def transform_sample(self, x):
+        pass
+    
+    def transform_batch(self, batch):
+        pass 
+    
+    
 def random_crop(
     volume: torch.Tensor,
     min_scale: float = 0.5,
