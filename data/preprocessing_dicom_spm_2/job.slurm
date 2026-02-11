@@ -3,7 +3,7 @@
 #SBATCH --job-name=preprocessing_dicom
 #SBATCH --output=./logs/preprocessing_dicom_%A_%a.out
 #SBATCH --error=./logs/preprocessing_dicom_%A_%a.err
-#SBATCH --time=01:30:00
+#SBATCH --time=2:30:00
 #SBATCH --partition=amd
 #SBATCH --ntasks=1
 #SBATCH --mem=4G
@@ -17,7 +17,7 @@ scan_paths=( $(python ../../utils/get_scan_paths.py "$1") )
 
 # Figure out how many scans each of the 100 tasks should handle
 total=${#scan_paths[@]}
-num_jobs=100
+num_jobs=200
 job_idx=$(( SLURM_ARRAY_TASK_ID - 1 ))                     # zero‑based
 chunk_size=$(( (total + num_jobs - 1) / num_jobs ))       # ceil(total/num_jobs)
 start=$(( job_idx * chunk_size ))

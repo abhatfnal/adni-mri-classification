@@ -22,10 +22,10 @@ module load matlab
 # -------------------------------------
 
 # Absolute path to SPM12 installation folder (WITHOUT final /)
-export SPM_PATH="/project/aereditato/cestari/spm/spm"
+export SPM_PATH="/project/aereditato/abhat/adni-mri-classification/spm/spm"
 
 # Absolute path to diagnosis file DXSUM_05Apr2025.csv
-export DIAGNOSIS_FILE="/project/aereditato/cestari/adni-mri-classification/data/DXSUM_05Apr2025.csv"
+export DIAGNOSIS_FILE="/project/aereditato/abhat/ADNI/Original/DXSUM_13Aug2025.csv"
 
 # 3) Print setup
 # --------------------------------------

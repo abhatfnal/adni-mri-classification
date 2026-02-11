@@ -80,6 +80,15 @@ def build_augmentation(cfg: dict) -> tio.Compose:
                     p=params.get('p', 0.5),
                 )
             )
+            
+        elif name == 'random_noise':
+            transforms.append(
+                tio.RandomNoise(
+                    std=params.get('std', 0.05),
+                    p=params.get('p', 0.2)
+                )
+            )
+
         else:
             raise ValueError(f"Unknown transform: {name}")
     return tio.Compose(transforms)

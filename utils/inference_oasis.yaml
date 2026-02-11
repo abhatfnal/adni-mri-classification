@@ -1,0 +1,21 @@
+# Configuration for running inference on the OASIS-1 dataset
+
+inference:
+  # Path to the best performing model from your ADNI training (Fold 3)
+  model_path: '/project/aereditato/abhat/adni-mri-classification/experiments/resnet18_20250821_190324_CN_vs_AD/fold_3/best_model.pth'
+  
+  # Path to the OASIS test set CSV we created
+  test_csv: '/project/aereditato/abhat/OASIS/OASIS_1/trainval.csv'
+
+# This section is copied directly from your ADNI config.yaml
+# It's required so the script can build the model architecture before loading the weights.
+model:
+  name: resnet18
+  num_classes: 2
+  in_channels: 1
+  init_filters: 16
+  dropout: 0.25
+
+# Batch size is needed for the DataLoader.
+training:
+  batch_size: 16

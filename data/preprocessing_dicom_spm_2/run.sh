@@ -22,4 +22,4 @@ if [[ "${FILE##*.}" != "zip" ]]; then
 fi
 
 # Run 100 parallel jobs
-sbatch --array=1-100 job.slurm "$FILE"
+sbatch --array=1-200 job.slurm "$FILE"

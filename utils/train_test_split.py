@@ -31,7 +31,9 @@ if __name__ == "__main__":
         df = pd.read_csv(args.input_csv)
         
         # Get labels 
-        labels = df['diagnosis'].astype(int).tolist()
+        # labels = df['diagnosis'].astype(int).tolist()
+        labels = pd.to_numeric(df['diagnosis'], errors='raise').astype(int).tolist()
+
         
         # Get random state if specified
         random_state = int(args.r) if args.r else 42

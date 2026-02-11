@@ -20,18 +20,21 @@ class ADNIDataset(Dataset):
         
         # Keep only relevant diagnoses and create labels
         self.data = self.data[self.data['diagnosis'].isin([1.0, 2.0, 3.0])]
-        self.data['label'] = self.data['diagnosis'].astype(int) - 1
-        self.augment = augment
+        # self.data['label'] = self.data['diagnosis'].astype(int) - 1
+        unique_diagnoses = sorted(self.data['diagnosis'].unique())
+        diag_to_label = {diag: i for i, diag in enumerate(unique_diagnoses)}
+        self.data['label'] = self.data['diagnosis'].map(diag_to_label)
+        # self.augment = augment
 
-        # define a 3D augmentation pipeline
-        if self.augment:
-            self.transforms = tio.Compose([
-                tio.RandomFlip(axes=(0,1,2), p=0.5),
-                tio.RandomAffine(scales=(0.9,1.1), degrees=10, p=0.5),
-                tio.RandomNoise(mean=0.0, std=(0,0.1), p=0.5),
-            ])
-        else:
-            self.transforms = None
+        # # define a 3D augmentation pipeline
+        # if self.augment:
+        #     self.transforms = tio.Compose([
+        #         tio.RandomFlip(axes=(0,1,2), p=0.5),
+        #         tio.RandomAffine(scales=(0.9,1.1), degrees=10, p=0.5),
+        #         tio.RandomNoise(mean=0.0, std=(0,0.1), p=0.5),
+        #     ])
+        # else:
+        #     self.transforms = None
 
     def __len__(self):
         return len(self.data)

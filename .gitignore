@@ -39,3 +39,8 @@ unsloth_compiled_cache/
 
 # Misc
 output.log
+spm/
+spm.zip
+data/preprocessing_dicom_spm_2/data_ADNI_3_3T_3D/
+data/preprocessing_dicom_spm_2/pet_paths_output.txt
+*.csv

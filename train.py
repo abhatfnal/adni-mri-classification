@@ -6,6 +6,7 @@ import os
 import yaml
 import datetime
 import argparse
+import numpy as np
 
 from inspect import getfile
 from models.registry import get_model
@@ -95,31 +96,37 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     dataset_tv     = ADNIDataset(trainval_csv, transform=None)
     dataset_test   = ADNIDataset(test_csv,     transform=None)
 
-    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
-    # Prepare indices and labels for splitting
-    labels  = dataset_tv.labels()
-    indices = list(range(len(dataset_tv)))
+    # Prepare indices, labels, and groups (RID) for splitting
+    tv_df   = pd.read_csv(trainval_csv)
+    labels  = dataset_tv.labels()   # stratify by diagnosis
+    groups  = tv_df['rid'].to_numpy() # group by subject (RID)
+    indices = tv_df.index.to_numpy()
+
     method = cfg.cross_validation.get('method', 'kfold')
     seed   = int(cfg.cross_validation.get('seed', 42))
+    
+    y = torch.tensor(labels)
+    print('Label min/max:', int(y.min()), int(y.max()))
 
     if method == 'kfold':
-        from sklearn.model_selection import StratifiedKFold
+        from sklearn.model_selection import StratifiedGroupKFold
         n_splits = int(cfg.cross_validation.folds)
-        splitter = StratifiedKFold(
+        splitter = StratifiedGroupKFold(
             n_splits=n_splits,
             shuffle=True,
             random_state=seed,
         )
-        
     elif method == 'holdout':
-        from sklearn.model_selection import StratifiedShuffleSplit
+        from sklearn.model_selection import GroupShuffleSplit
         val_frac = float(cfg.cross_validation.val_fraction)
-        splitter = StratifiedShuffleSplit(
+        splitter = GroupShuffleSplit(
             n_splits=1,
             test_size=val_frac,
             random_state=seed,
         )
+
     else:
         raise ValueError(f"Unknown split method: {method!r}")
 
@@ -128,7 +135,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
     cms = []
     
     # Loop over folds
-    for fold, (train_idx, val_idx) in enumerate(splitter.split(indices, labels), start=1):
+    for fold, (train_idx, val_idx) in enumerate(splitter.split(indices, labels, groups), start=1):
+
         print(f"\n===== Fold {fold}/{splitter.get_n_splits()} =====")
 
         # Subsets
@@ -137,29 +145,39 @@ def train_and_evaluate(cfg_path, exp_dir=None):
 
         # Data loaders
         if oversample:
-            
             # Create weighted random sampler to sample uniformly from all classes
-            import numpy as np
             from torch.utils.data import WeightedRandomSampler
             
             train_labels = np.array(labels)[train_idx]
-            class_weights = 1/np.bincount(train_labels)
-            sample_weights = class_weights[train_labels]
+            class_weights_sampler = 1/np.bincount(train_labels)
+            sample_weights = class_weights_sampler[train_labels]
             
             sampler = WeightedRandomSampler(torch.DoubleTensor(sample_weights), len(sample_weights), replacement=True)
             
             # Create train loader
-            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler, num_workers=4, pin_memory=True)
+            train_loader = DataLoader(train_set,batch_size=batch_size,sampler=sampler, num_workers=1, pin_memory=True)
         
         else:
-            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+            train_loader = DataLoader(train_set,batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True)
         
-        val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
+        val_loader   = DataLoader(val_set,   batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
-        # Initialize model, loss, optimizer
+        # Initialize model
         ModelClass = get_model(model_name)
         model = ModelClass(model_cfg).to(device)
-        criterion = nn.CrossEntropyLoss()
+
+        # --- CORRECTED SECTION ---
+        # Compute class weights for the CURRENT FOLD's training data
+        train_labels = np.array(labels)[train_idx]
+        class_counts = torch.bincount(torch.tensor(train_labels))
+        class_weights = 1.0 / class_counts.float()
+        class_weights = class_weights / class_weights.sum()  # normalize to sum to 1
+        class_weights = class_weights.to(device)
+        print(f"Using class weights (Fold {fold}): {class_weights.cpu().numpy()}")
+
+        # Define weighted loss
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        # --- END OF CORRECTED SECTION ---
 
         if optim_name == 'adamw':
             optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -260,8 +278,8 @@ def train_and_evaluate(cfg_path, exp_dir=None):
 
         # Plot and save loss curve
         plt.figure()
-        plt.plot(range(1, epochs+1), train_losses, label='Train')
-        plt.plot(range(1, epochs+1), val_losses,   label='Val')
+        plt.plot(range(1, len(train_losses)+1), train_losses, label='Train')
+        plt.plot(range(1, len(val_losses)+1),   val_losses,   label='Val')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.title(f'Fold {fold} Loss Curve')
@@ -338,7 +356,7 @@ def submit_slurm(config_path, dir_path):
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#SBATCH --time=4:00:00
+#SBATCH --time=15:00:00
 #SBATCH --output={log_out}
 #SBATCH --error={log_err}
 #SBATCH --account=pi-aereditato
@@ -353,12 +371,13 @@ nvidia-smi
 echo "Starting job at $(date)"
 
 # Go to project directory
-cd /project/aereditato/cestari/adni-mri-classification
+cd /project/aereditato/abhat/adni-mri-classification
 
 # Run training using the same experiment directory
 python {abs_train} --config {abs_cfg} --dir {exp_dir}
 
-echo "Finished at $(date)"""  
+echo "Finished at $(date)"
+"""
 
     with open(slurm_path, 'w') as f:
         f.write(content)
