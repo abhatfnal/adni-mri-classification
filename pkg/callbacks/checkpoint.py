@@ -1,13 +1,14 @@
 import torch
-from callback import Callback
+from .callback import Callback
 
 class CheckpointManager(Callback):
-    def __init__(self, save_path, monitor="val/loss", mode="min", patience=10):
-        self.save_path = save_path
+    def __init__(self, monitor="val/loss", mode="min", patience=10, priority=10):
         self.monitor = monitor
         self.mode = mode
         self.patience = int(patience)
         self.reset()
+
+        self.priority = priority
 
     def reset(self):
         self.patience_counter = 0

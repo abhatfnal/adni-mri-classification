@@ -1,7 +1,7 @@
 class Callback():
 
     def __init__(self):
-        pass
+        self.priority = 10 # Default priority
 
     def on_fit_start(self, context):
         pass

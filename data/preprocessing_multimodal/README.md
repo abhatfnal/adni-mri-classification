@@ -1,0 +1,1 @@
+This pipeline handles the preprocessing of MRI and PET samples

@@ -38,7 +38,12 @@ class ADNIDataModule(DataModule):
     given cross validation splitting, dataset, loader and augmentation transform configs. 
     """
 
-    def __init__(self):
+    def __init__(self, data, split, loader, transform):
+
+        self.data_cfg = data
+        self.split_cfg = split
+        self.loader_cfg = loader
+        self.transform_cfg = transform
 
         self.fold_index = 0
 
@@ -46,32 +51,23 @@ class ADNIDataModule(DataModule):
         self._val_loader = None
         self._test_loader = None
 
-    def setup(self, data, split, loader, transform):
+    def setup(self):
 
-        self.ds = ADNIDataset(**data)
-        self.split_cfg = split
-        self.loader_cfg = loader
-        self.transform_cfg = transform
+        # Create dataset
+        self.ds = ADNIDataset(**self.data_cfg)
 
-        # Set up dataset
+        # Set it up
         self.ds.setup()
 
         # Create splitter
         splitter = Splitter(range(len(self.ds)), self.ds.labels(), self.ds.groups(),**self.split_cfg)
 
-        # Create test dataset
-        test_transform = None
-        if self.transform_cfg["test"] is not None:
-            test_transform = build_augmentation(self.transform_cfg["test"])
-
-        test_dataset = TransformDataset(Subset(self.ds, splitter.test_split()), test_transform)
-
-        # Create test loader
-        self._test_loader = build_loader(test_dataset, labels=None,**self.loader_cfg["eval"])
+        # Create test dataset and loader
+        test_dataset = Subset(self.ds, splitter.test_split())
+        self._test_loader = build_loader(test_dataset, labels=None)
 
         # Get train and validation indices for each fold
         self.folds = splitter.cv_split()
-
         
     def set_fold(self, idx):
 
@@ -84,20 +80,19 @@ class ADNIDataModule(DataModule):
         train_idxs = self.folds[idx][0]
         val_idxs = self.folds[idx][1]
 
-        # Transforms
-        train_tfm = build_augmentation(self.transform_cfg["train"])
-        val_tfm = build_augmentation(self.transform_cfg["val"])
-
+        # Augmentation transform
+        augmentation = build_augmentation(self.transform_cfg)
+        
         # Datasets
-        train_ds = TransformDataset(Subset(self.ds, train_idxs), transform=train_tfm)
-        val_ds = TransformDataset(Subset(self.ds, val_idxs), transform=val_tfm)
+        train_ds = TransformDataset(Subset(self.ds, train_idxs), transform=augmentation)
+        val_ds = Subset(self.ds, val_idxs)
 
         # Store train_labels (can be used for computing weights for loss criterion)
         self.train_labels = np.array(self.ds.labels())[train_idxs]
 
         # Loaders 
-        self._train_loader = build_loader(train_ds, labels=self.train_labels, **self.loader_cfg["train"])
-        self._val_loader = build_loader(val_ds, labels=None, **self.loader_cfg["eval"])
+        self._train_loader = build_loader(train_ds, labels=self.train_labels, **self.loader_cfg)
+        self._val_loader = build_loader(val_ds)
 
     def n_folds(self):
         return len(self.folds)

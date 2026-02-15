@@ -9,30 +9,40 @@ from torch.utils.data import Dataset
 from pkg.utils.diagnosis_matching import match_diagnosis
 from pkg.utils.multimodality import create_multimodal_dataframe
 
+from tqdm import tqdm
+
 
 class ADNIDataset(Dataset):
     
-    def __init__(self, 
+    def __init__(self,
+                 data_dir,
                  scan_csv, 
                  diagnostic_csv, 
                  modalities={
                      "MRI":["MRI-T1-3T", "MRI-T1-1.5T"],
                      "PET":["PET-FDG"] }, 
                  diagnosis=[1,2,3], 
-                 tolerance=180):
+                 tolerance=180,
+                 verbose=2):
     
+        self.data_dir =data_dir
         self.scan_csv = scan_csv
         self.diagnostic_csv = diagnostic_csv
         self.modalities = modalities 
         self.diagnosis = diagnosis
         self.tolerance = tolerance
+        self.verbose = verbose
 
         
     def setup(self):
 
-        # Load csv with all scans
+        # Load csv with all scans descriptions
         df_scan = pd.read_csv(self.scan_csv)
-        
+
+        # Filter for those available in the data dir
+        available_scans = os.listdir(self.data_dir)
+        df_scan = df_scan[ df_scan["image_id"].isin(available_scans)]
+
         # Create modalities from groups as described in the parameter "modalities"
         df_scan["modality"] = ""
 
@@ -41,15 +51,47 @@ class ADNIDataset(Dataset):
 
         # Filter for specified modalities 
         df_scan = df_scan[ df_scan["modality"].isin(list(self.modalities.keys()))].copy()
-        
+
         # Load csv with all visits
         df_diagnostic = pd.read_csv(self.diagnostic_csv)
-        
+
+        if self.verbose > 0:
+            print("Matching scans to diagnoses...")
+
         # Match scans to visits, adding diagnosis column
         df_scan = match_diagnosis(df_scan, df_diagnostic, self.tolerance)
 
         # Filter for specified diagnosis
         df_scan = df_scan[ df_scan["diagnosis"].isin(self.diagnosis)].copy()
+        
+        if self.verbose > 0:
+            print("Verifying scans available in dir...")
+
+        # Add file paths
+        paths = []
+        for index, row in tqdm(df_scan.iterrows()):
+
+            id = row["image_id"]
+            allowed_filenames = ['clean_w_masked_m' + id + '.nii', 
+                                 'clean_w_masked_rstatic_' + id + '.nii']
+            
+            found = False
+            for fname in allowed_filenames:
+
+                path = os.path.join( self.data_dir, id, fname )
+                if os.path.exists(path):
+                    paths.append(path)
+                    found = True
+                    break
+
+            if not found:
+                paths.append(None)
+
+        df_scan["path"] = paths
+        df_scan = df_scan[ df_scan["path"].notna()]
+
+        if self.verbose > 0:
+            print("Creating multimodal samples...")
 
         # Create multimodal samples
         df_multimodal = create_multimodal_dataframe(df_scan, tolerance=self.tolerance)
@@ -66,7 +108,28 @@ class ADNIDataset(Dataset):
         return len(self.df_multimodal)
     
     def __getitem__(self, index):
-        pass
+
+        scans = []
+        row = self.df_multimodal.loc[index]
+
+        for mode in sorted(list(self.modalities.keys())):
+            
+            if row[mode] is None:
+                scans.append(None)
+                continue
+
+            path = self.df_scan.loc[ self.df_scan["image_id"] == row[mode], "path"].tolist()[0]
+            vol = nib.load(path).get_fdata().astype(np.float32)         
+            img = torch.from_numpy(vol).unsqueeze(0)  # Add channel dimension (1,D,H,W)
+
+            #TODO: Add augmentation transforms !
+
+            scans.append(img)
+    
+        X = tuple(scans) if len(self.modalities) > 1 else scans[0]
+        y = torch.tensor(int(row['label']), dtype=torch.long)
+
+        return X,y
 
     def groups(self):
         return self.df_multimodal["subject_id"].astype(str).tolist()

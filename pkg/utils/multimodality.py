@@ -166,7 +166,6 @@ def create_multimodal_dataframe(df_scans, tolerance=180, passes=2):
                 # Update scans 
                 scans = scans[~scans["image_id"].isin(used_ids)]
 
-
             # Add multimodal samples to final dataframe entries
             for s in samples:
 
@@ -187,10 +186,34 @@ def create_multimodal_dataframe(df_scans, tolerance=180, passes=2):
         # Create final dataframe
         df_final = pd.DataFrame(entries)
 
-        # Add stratification keys: diagnosis + presence of modalities
-        df_final["strat_key"] = df_final["diagnosis"].astype("str")
+        # Add stratification keys: diagnosis + presence of scan belonging to different groups
+        # (MRI 3T, MRI 1.5T, PET-FDG, PET-AV45, PET-AV1451, PET-FBB, PET-MK6240, PET-NAV4694, PET-PI2620)
 
-        for mode in modalities:
-            df_final["strat_key"] += (df_final[mode].notna()*1).astype("str")
-    
+        keys = []
+
+        for index, row in df_final.iterrows():
+
+            # Initalize key as diagnosis
+            key = str(int(row["diagnosis"]))
+
+            # Get scans list
+            scans = []
+            for mode in modalities:
+                if row[mode] is not None:
+                    scans.append(row[mode])
+
+            # For each group, check if there's a scan belonging to that group
+            # (the assumption is that modalities are disjoint sets of groups, 
+            # so a group can appear in only one modality)
+            for group in sorted(df_scans["group"].unique()):
+
+                if group in df_scans[ df_scans["image_id"].isin(scans) ]["group"].tolist():
+                    key += "1"
+                else:
+                    key += "0"
+
+            keys.append(key)
+
+        df_final["strat_key"] = keys
+
         return df_final

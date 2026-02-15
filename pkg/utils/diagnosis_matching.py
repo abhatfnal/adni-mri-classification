@@ -8,15 +8,21 @@ def match_diagnosis(df_scan, df_diagnostic, tolerance):
         Adds diagnosis column to scan dataframe by matching it with temporally closest visit
         in the diagnositc dataframe. 
         """
-        
+
         to_concat = []
     
         df_scan = df_scan.copy()
         df_diagnostic = df_diagnostic.copy()
 
+        # Rename columns 
+        df_diagnostic = df_diagnostic.rename(columns={"EXAMDATE":"exam_date", "DIAGNOSIS":"diagnosis"})
+
         # Ensure datetime dtype once
-        df_diagnostic["EXAMDATE"] = pd.to_datetime(df_diagnostic["EXAMDATE"])
+        df_diagnostic["exam_date"] = pd.to_datetime(df_diagnostic["exam_date"])
         df_scan["image_date"] = pd.to_datetime(df_scan["image_date"])
+
+        # Keep track of original cols to preserve (+ diagnosis and exam date)
+        cols_to_keep = df_scan.columns.tolist() + ["diagnosis", "exam_date"]
 
         for subj in tqdm(df_scan["subject_id"].unique()):
 
@@ -25,27 +31,27 @@ def match_diagnosis(df_scan, df_diagnostic, tolerance):
             subj_scans = df_scan[df_scan["subject_id"] == subj].copy()
 
             # Drop NaN values
-            subj_vis = subj_vis.dropna(subset=["EXAMDATE"])
+            subj_vis = subj_vis.dropna(subset=["exam_date"])
             subj_scans = subj_scans.dropna(subset=["image_date"])
             
             # Merge_asof requires sorting by the key
-            subj_vis = subj_vis.sort_values("EXAMDATE")
+            subj_vis = subj_vis.sort_values("exam_date")
             subj_scans = subj_scans.sort_values("image_date")
 
             # Match nearest withing tolerance
             nearest = pd.merge_asof(
                 subj_scans,
-                subj_vis[["EXAMDATE", "DIAGNOSIS"]],
+                subj_vis[["exam_date", "diagnosis"]],
                 left_on="image_date",
-                right_on="EXAMDATE",
+                right_on="exam_date",
                 direction="nearest",
                 tolerance=pd.Timedelta(days=tolerance),
             )
 
             # Get matched and append to list
-            matched = nearest[nearest["DIAGNOSIS"].notna()].copy()
-            matched = matched.rename(columns={"DIAGNOSIS": "diagnosis", "EXAMDATE":"exam_date"})
-            matched = matched[["image_id", "image_date", "subject_id", "exam_date", "group", "modality", "diagnosis"]]  
+            matched = nearest[nearest["diagnosis"].notna()].copy()
+
+            matched = matched[ cols_to_keep ]  
     
             to_concat.append(matched)
 
@@ -62,48 +68,47 @@ def match_diagnosis(df_scan, df_diagnostic, tolerance):
             # Get closest visits before
             before = pd.merge_asof(
                 remaining,
-                subj_vis[["EXAMDATE", "DIAGNOSIS"]],
+                subj_vis[["exam_date", "diagnosis"]],
                 left_on="image_date",
-                right_on="EXAMDATE",
+                right_on="exam_date",
                 direction="backward",   # visit on/before scan
                 allow_exact_matches=True,
-            ).rename(columns={"EXAMDATE": "EXAMDATE_before", "DIAGNOSIS": "DIAGNOSIS_before"})
+            ).rename(columns={"exam_date": "exam_date_before", "diagnosis": "diagnosis_before"})
 
             # Get closest visits after
             after = pd.merge_asof(
                 remaining,
-                subj_vis[["EXAMDATE", "DIAGNOSIS"]],
+                subj_vis[["exam_date", "diagnosis"]],
                 left_on="image_date",
-                right_on="EXAMDATE",
+                right_on="exam_date",
                 direction="forward",    # visit on/after scan
                 allow_exact_matches=True,
-            ).rename(columns={"EXAMDATE": "EXAMDATE_after", "DIAGNOSIS": "DIAGNOSIS_after"})
+            ).rename(columns={"exam_date": "exam_date_after", "diagnosis": "diagnosis_after"})
 
             
             # Bracket: closest visit before + closest visit after!
             bracket = before.merge(
-                after[["image_id", "EXAMDATE_after", "DIAGNOSIS_after"]],
+                after[["image_id", "exam_date_after", "diagnosis_after"]],
                 on="image_id",
                 how="inner",
             )
 
             # need both sides, and diagnosis must agree
             bracket = bracket[
-                bracket["DIAGNOSIS_before"].notna()
-                & bracket["DIAGNOSIS_after"].notna()
-                & (bracket["DIAGNOSIS_before"] == bracket["DIAGNOSIS_after"])
+                bracket["diagnosis_before"].notna()
+                & bracket["diagnosis_after"].notna()
+                & (bracket["diagnosis_before"] == bracket["diagnosis_after"])
             ].copy()
 
-            bracket["DIAGNOSIS"] = bracket["DIAGNOSIS_after"]
+            bracket["diagnosis"] = bracket["diagnosis_after"]
 
             # Keep closest exam date
-            d_before = (bracket["image_date"] - bracket["EXAMDATE_before"]).abs()
-            d_after  = (bracket["EXAMDATE_after"] - bracket["image_date"]).abs()
-            bracket["exam_date"] = bracket["EXAMDATE_before"].where(d_before <= d_after, bracket["EXAMDATE_after"])
+            d_before = (bracket["image_date"] - bracket["exam_date_before"]).abs()
+            d_after  = (bracket["exam_date_after"] - bracket["image_date"]).abs()
+            bracket["exam_date"] = bracket["exam_date_before"].where(d_before <= d_after, bracket["exam_date_after"])
 
-            # Rename and keep only relevant columns
-            bracket = bracket.rename(columns={"DIAGNOSIS":"diagnosis"})
-            bracket = bracket[["image_id", "image_date", "subject_id", "exam_date", "group", "modality", "diagnosis"]]
+            # Keep only relevant columns
+            bracket = bracket[cols_to_keep]
     
             
             to_concat.append(bracket)

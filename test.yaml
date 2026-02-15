@@ -2,8 +2,9 @@ datamodule:
   class: pkg.data.datamodules.ADNIDataModule
   args:
     data:
-      scan_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/dataset_multimodal.csv
-      diagnostic_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/tables/DXSUM_02Feb2026.csv
+      data_dir: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/data/
+      scan_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/dataset_multimodal.csv
+      diagnostic_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/DXSUM_02Feb2026.csv
       diagnosis: [1,2,3]
       tolerance: 180
       modalities:
@@ -49,24 +50,15 @@ criterion:
   params: {}
         
 task:
-  class: pkg.tasks.classification.ClassificationTask
-  args:
-    output_mode: multiclass # | binary 
+  class: pkg.tasks.dummytask.DummyTask
+  args: {}
     
 trainer:
-  max_epochs: 100
-  device: cuda
+  max_epochs: 10
 
 callbacks:
   - class: pkg.callbacks.metrics.Metrics
-    args:
-      metrics:
-        - class: pkg.metrics.scalar.ScalarMetric
-          args:
-            key: loss
-
-        - class: pkg.metrics.accuracy.Accuracy
-          args: {}
+    args: {}
 
   - class: pkg.callbacks.checkpoint.CheckpointManager
     args: 
@@ -77,6 +69,7 @@ callbacks:
   - class: pkg.callbacks.scheduler.SchedulerPolicy
     args: 
       name: ReduceLROnPlateau
+      params: {}
 
 
 
