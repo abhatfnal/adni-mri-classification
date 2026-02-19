@@ -9,7 +9,7 @@ class Callback():
     def on_train_epoch_start(self, context):
         pass
 
-    def on_train_batch_start(self):
+    def on_train_batch_start(self, context):
         pass 
 
     def on_train_batch_end(self, context, out, batch, batch_idx):
@@ -31,6 +31,18 @@ class Callback():
         pass 
 
     def on_val_epoch_end(self, context):
+        pass
+
+    def on_test_start(self, context):
+        pass 
+
+    def on_test_batch_start(self, context):
+        pass 
+
+    def on_test_batch_end(self, context, out, batch, batch_idx):
+        pass 
+    
+    def on_test_end(self, context):
         pass
 
 

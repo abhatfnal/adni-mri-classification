@@ -1,9 +1,15 @@
-from .datasets import ADNIDataset, TransformDataset
+from .datasets import ADNIDataset, TransformDataset, DummyDataset
 from .splitter import Splitter
 from torch.utils.data import DataLoader, Subset
 from .augmentation import build_augmentation
 from .loaders import build_loader
+
 import numpy as np 
+import pandas as pd
+import os
+
+import json
+from pathlib import Path
 
 class DataModule:
     """
@@ -22,13 +28,19 @@ class DataModule:
     def n_folds():
         raise NotImplementedError
     
-    def train_loader(epoch):
-        raise NotImplementedError 
-
-    def val_loader(epoch):
+    def dump(self, path):    # Reproducibility
         raise NotImplementedError
 
-    def test_loader(epoch):
+    def load(self, path):    # Reproducibility
+        raise NotImplementedError
+    
+    def train_dataloader(self,epoch):
+        raise NotImplementedError 
+
+    def val_dataloader(self):
+        raise NotImplementedError
+
+    def test_dataloader(self):
         raise NotImplementedError
 
 
@@ -62,8 +74,11 @@ class ADNIDataModule(DataModule):
         # Create splitter
         splitter = Splitter(range(len(self.ds)), self.ds.labels(), self.ds.groups(),**self.split_cfg)
 
+        # Save test indices
+        self._test_idx = splitter.test_split()
+        
         # Create test dataset and loader
-        test_dataset = Subset(self.ds, splitter.test_split())
+        test_dataset = Subset(self.ds, self._test_idx)
         self._test_loader = build_loader(test_dataset, labels=None)
 
         # Get train and validation indices for each fold
@@ -106,6 +121,106 @@ class ADNIDataModule(DataModule):
     def test_dataloader(self):
         return self._test_loader
 
+    def dump(self, dir):
+
+        # Dump df_scan and df_multimodal from dataset
+        self.ds.df_multimodal.to_csv(os.path.join(dir, "samples.csv"))
+
+        indices = {
+            "test_idx": self._test_idx, 
+            "folds": {
+                i:self.folds[i] for i in range(len(self.folds))
+            }}
+
+        # Dump indices
+        with open(os.path.join(dir, "indices.json")) as f:
+            f.write(json.dumps(indices))
+
+    def info(self):
+
+        # Unique stratification keys
+        unique_keys = self.ds.df_multimodal["strat_key"].unique().tolist()
+
+        # Row and column multi indices for info dataframe
+        row_index = pd.MultiIndex.from_product([ 
+                        [f"Fold {i}" for i in range(len(self.folds)) ], 
+                        ["Train", "Val"]]
+                    )
+        col_index = pd.MultiIndex.append(
+            pd.MultiIndex.from_tuples( [ ("#", ""), ("%", "")]),
+            pd.MultiIndex.from_product([ ["Stratification Keys Distribution"], unique_keys])
+        )
+
+        # Create empty dataframe
+        df = pd.DataFrame(index=row_index, columns=col_index)
+
+        for i, fold in enumerate(self.folds):
+
+            train_idxs, val_idxs = fold
+            tot = len(train_idxs) + len(val_idxs)
+
+            # Sample counts
+            df.loc[(f"Fold {i}", "Train"), ("#","")] = len(train_idxs)
+            df.loc[(f"Fold {i}", "Val"), ("#","")] = len(val_idxs)
+
+            # As percentage
+            df.loc[(f"Fold {i}", "Train"), ("%","")] = float(len(train_idxs)/tot)
+            df.loc[(f"Fold {i}", "Val"), ("%","")] = float(len(val_idxs)/tot)
+
+            # Stratification keys distribution
+            train_keys_dist = self.ds.df_multimodal.loc[train_idxs, :].groupby("strat_key")["diagnosis"].count()/len(train_idxs)
+            val_keys_dist = self.ds.df_multimodal.loc[val_idxs, :].groupby("strat_key")["diagnosis"].count()/len(val_idxs)
+
+            for key in train_keys_dist.index:
+                df.loc[(f"Fold {i}", "Train"), ("Stratification Keys Distribution",key)] = train_keys_dist[key]
+
+            for key in val_keys_dist.index:
+                df.loc[(f"Fold {i}", "Val"), ("Stratification Keys Distribution", key)] = val_keys_dist[key]
+
+        # Add test dataset statistics 
+        df.loc[("Test",""),("#","")] = len(self._test_idx)
+        df.loc[("Test",""),("%","")] =  float(1)
+
+        test_keys_dist = self.ds.df_multimodal.loc[self._test_idx, :].groupby("strat_key")["diagnosis"].count()/len(self._test_idx)
+        
+        for key in test_keys_dist.index:
+            df.loc[("Test",""),("Stratification Keys Distribution", key)] = test_keys_dist[key]
+
+        # Round numbers 
+        df = df.apply(pd.to_numeric)
+        df = df.round(3)
+        return df
+
+
+class DummyDataModule(DataModule):
+
+    def __init__(self, *args, **kwargs):
+        self.ds = DummyDataset()
+        self._train_loader = DataLoader(self.ds)
+        self._val_loader = DataLoader(self.ds)
+        self._test_loader = DataLoader(self.ds)
+        self.train_labels = [1,1,1,1,1,1,1,1,1,1]
+
+    def setup(self):
+        pass 
+
+    def set_fold(self, fold):
+        pass 
+
+    def n_folds(self):
+        return 5
+    
+    def train_dataloader(self, epoch):
+        return self._train_loader
+
+    def val_dataloader(self):
+        return self._val_loader
+
+    def test_dataloader(self):
+        return self._test_loader
+
+    def info(self):
+        return "Dummy Dataset"
 
 
     

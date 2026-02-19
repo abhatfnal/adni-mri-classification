@@ -3,37 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import BaseModel
-
-class SAM3d(nn.Module):
-    """
-    3d Spatial attention module
-    """
-    
-    def __init__(self):
-        super().__init__()
-        
-        # (7x7x7) convolutional layer
-        self.conv = nn.Conv3d(2,1,kernel_size=7,padding=7//2)  # mantain original size
-        
-    def forward(self, x):
-        
-        # Assume x has size (N,C,D,H,W)
-        
-        # Take max in the channel dimension. Size: (N,1,D,H,W)
-        channel_max = torch.max(x, 1, keepdim=True)[0]
-        
-        # Take average in the channel dimension: Size (N,1,D,H,W)
-        channel_avg = torch.sum(x, 1, keepdim=True)/x.shape[1]
-        
-        # Concatenate vectors: Size (N,2,D,H,W)
-        m = torch.concat((channel_avg, channel_max), dim=1)
-        
-        # Apply convolution and sigmoid. Size (N,1,D,H,W)
-        m = F.sigmoid(self.conv(m))
-        
-        # Element wise multiplication 
-        return m*x
-
+from .components import SAM3d
 
 class BasicBlock1(nn.Module):
     
@@ -42,36 +12,30 @@ class BasicBlock1(nn.Module):
         
         self.residual1 = nn.Sequential(
             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
-            nn.BatchNorm3d(channel_in),
+            nn.GroupNorm(8, channel_in),
             nn.ReLU(),
             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
-            nn.BatchNorm3d(channel_in),
+            nn.GroupNorm(8, channel_in),
             SAM3d()
         )
         
         self.residual2 = nn.Sequential(
             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
-            nn.BatchNorm3d(channel_in),
+            nn.GroupNorm(8, channel_in),
             nn.ReLU(),
             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
-            nn.BatchNorm3d(channel_in),
+            nn.GroupNorm(8, channel_in),
             SAM3d()
         )
         
     def forward(self, x):
         
-        # First residual + skip connection, then activation
         x = F.relu(self.residual1(x) + x)
-        
-        # Second residual + skip connection, then activation
         x = F.relu(self.residual2(x) + x)
         
         return x
 
 class BasicBlock2(nn.Module):
-    """
-    Same as BasicBlock1 but doubles output channels and halves spatial dimensions
-    """
     
     def __init__(self, channel_in):
         super().__init__()
@@ -80,31 +44,27 @@ class BasicBlock2(nn.Module):
         
         self.residual1 = nn.Sequential(
             nn.Conv3d(channel_in, channel_out, 3, stride=2, padding=3//2),
-            nn.BatchNorm3d(channel_out),
+            nn.GroupNorm(8, channel_out),
             nn.ReLU(),
             nn.Conv3d(channel_out, channel_out, 3, padding=3//2),
-            nn.BatchNorm3d(channel_out),
+            nn.GroupNorm(8, channel_out),
             SAM3d()
         )
         
-        # First skip connection (linear map)
         self.skip1 = nn.Conv3d(channel_in, channel_out, 1, stride=2, padding=0)
         
         self.residual2 = nn.Sequential(
             nn.Conv3d(channel_out, channel_out, 3, padding=3//2),
-            nn.BatchNorm3d(channel_out),
+            nn.GroupNorm(8, channel_out),
             nn.ReLU(),
             nn.Conv3d(channel_out, channel_out, 3, padding=3//2),
-            nn.BatchNorm3d(channel_out),
+            nn.GroupNorm(8, channel_out),
             SAM3d()
         )
         
     def forward(self, x):
         
-        # First residual + skip connection, then activation
         x = F.relu(self.residual1(x) + self.skip1(x))
-        
-        # Second residual + skip connection, then activation
         x = F.relu(self.residual2(x) + x)
         
         return x
@@ -112,42 +72,25 @@ class BasicBlock2(nn.Module):
     
 class ResNet18(BaseModel):
     
-    def _build(self):
+    def __init__(self, num_classes=3, initial_filters=8, dropout=0):
         
-        # Configuration
-        num_classes  = int(self.cfg.get('num_classes', 3))
-        initial_filters = int(self.cfg.get('init_filters', 8))
-        dropout = float(self.cfg.get('dropout', 0))
-        avgpool_kernel_size = 2
-        
-        # initial block
+        super().__init__()
         self.initial_block = nn.Sequential(
             nn.Conv3d(1, initial_filters, 7, padding=7//2),
-            nn.BatchNorm3d(initial_filters),
+            nn.GroupNorm(8, initial_filters),
             nn.ReLU()
-        )   # (inital_filters, D, H, W)
+        )
         
-        # pooling
-        self.pool1 = nn.MaxPool3d(2)                # (initial_filters, floor(D/2), floor(H/2), floor(W/2))
+        self.pool1 = nn.MaxPool3d(2)
         
-        # basic block 1
-        self.bb_1 = BasicBlock1(initial_filters)    # shape unchanged
-        
-        # basic blocks 2 - 4
-        self.bb_2 = BasicBlock2(initial_filters)    # (initial_filters*2, floor(D/4), floor(H/4), floor(W/4))
-        self.bb_3 = BasicBlock2(initial_filters*2)  # (initial_filters*4, floor(D/8), floor(H/8), floor(W/8))
-        self.bb_4 = BasicBlock2(initial_filters*4)  # (initial_filters*8), floor(D/16), floor(H/16), floor(W/16))
+        self.bb_1 = BasicBlock1(initial_filters)
+        self.bb_2 = BasicBlock2(initial_filters)
+        self.bb_3 = BasicBlock2(initial_filters*2)
+        self.bb_4 = BasicBlock2(initial_filters*4)
 
-        # batch norm
-        self.norm = nn.BatchNorm3d(initial_filters*8)
-        
-        # avg pool
-        self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: ? (initial_filters*8, floor(D/32), floor(H/32), floor(W/32))
-        
-        # Dropout layer
+        self.norm = nn.GroupNorm(8, initial_filters*8)
+        self.avgpool = nn.AvgPool3d(2)
         self.dropout = nn.Dropout(dropout)
-        
-        # final fc layer (hardcoded dims) 384 for input size 79*95*79, 1728 for input size 91*109*91
         self.fc1 = nn.Linear(1728, num_classes)
         
     def forward(self, x):
@@ -160,17 +103,24 @@ class ResNet18(BaseModel):
         x = self.bb_4(x)
         
         x = self.avgpool(self.norm(x))
-        
         x = x.view(x.size(0), -1)
-        
         x = self.dropout(x)
         
         return self.fc1(x)
-    
-if __name__ == "__main__":
-    
-    model = ResNet18({"dropout":0.5})
-    print(model)
-    sample = torch.randn(1, 1, 91, 109, 91)
-    out = model(sample)
-    print(out.shape)
+
+    def train_batch(self, batch, batch_idx):
+        X,y = batch
+        y_hat = self.forward(X)
+        loss = self.criterion(y_hat, y)
+        return loss, {"loss":float(loss.item())}
+
+    def validate_batch(self, batch, batch_idx):
+        X,y = batch
+        y_hat = self.forward(X)
+        loss = self.criterion(y_hat, y)
+        return {"loss":float(loss.item())}
+
+    def test_batch(self, batch, batch_idx):
+        X,y = batch
+        y_hat = self.forward(X)
+        return {"preds":y_hat, "targets":y}

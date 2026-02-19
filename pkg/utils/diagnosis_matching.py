@@ -24,7 +24,7 @@ def match_diagnosis(df_scan, df_diagnostic, tolerance):
         # Keep track of original cols to preserve (+ diagnosis and exam date)
         cols_to_keep = df_scan.columns.tolist() + ["diagnosis", "exam_date"]
 
-        for subj in tqdm(df_scan["subject_id"].unique()):
+        for subj in df_scan["subject_id"].unique():
 
             # Get subject visits and scans
             subj_vis = df_diagnostic[df_diagnostic["PTID"] == subj].copy()

@@ -1,5 +1,6 @@
 
 import os 
+import re
 import sys
 import argparse
 import shutil
@@ -23,9 +24,11 @@ def main(data_dir, delete):
                 complete = True
         
         if not complete:
-            print(f"Incomplete folder: Id: {image_id} Path: {path}, artifacts: {files}")
+
+            if re.match(".*I[0-9]{2,}$",path): # Double check and make sure it's a scan dir!
+                print(f"Incomplete folder: Id: {image_id} Path: {path}, artifacts: {files}")
+                shutil.rmtree(path)
         
-        break
 
 
 if __name__ == "__main__":

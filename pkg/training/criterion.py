@@ -10,17 +10,22 @@ def build_criterion(cfg, train_labels=None, device="cpu"):
     name = cfg["name"]
 
     if name == "CrossEntropyLoss":
-        return nn.CrossEntropyLoss(**cfg["params"])
 
-    elif name == "WeightedCrossEntropyLoss":
-        if train_labels is None:
-            raise ValueError("WeightedCrossEntropyLoss requires train_labels.")
-        
-        counts = np.bincount(train_labels)
-        weights = 1.0 / counts
-        w = torch.tensor(weights, dtype=torch.float32, device=device)
-        
-        return nn.CrossEntropyLoss(weight=w, **cfg["params"])
+        if "params" in cfg and "weights" in cfg["params"]:
+            
+            if cfg["weights"] == "auto":
+
+                if train_labels is None:
+                    raise ValueError("WeightedCrossEntropyLoss requires train_labels.")
+                
+                counts = np.bincount(train_labels)
+                weights = 1.0 / counts
+                w = torch.tensor(weights, dtype=torch.float32, device=device)
+                
+                return nn.CrossEntropyLoss(weight=w, **cfg["params"])
+        else:
+            return nn.CrossEntropyLoss(**cfg["params"])
+  
 
     elif name == "BCEWithLogitsLoss":
         return nn.BCEWithLogitsLoss(**cfg["params"])

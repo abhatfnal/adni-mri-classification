@@ -1,0 +1,2396 @@
+diff --git a/data/preprocessing_multimodal/scripts/find_incomplete.py b/data/preprocessing_multimodal/scripts/find_incomplete.py
+index 5c74d84..dccfb3e 100644
+--- a/data/preprocessing_multimodal/scripts/find_incomplete.py
++++ b/data/preprocessing_multimodal/scripts/find_incomplete.py
+@@ -1,5 +1,6 @@
+ 
+ import os 
++import re
+ import sys
+ import argparse
+ import shutil
+@@ -23,9 +24,11 @@ def main(data_dir, delete):
+                 complete = True
+         
+         if not complete:
+-            print(f"Incomplete folder: Id: {image_id} Path: {path}, artifacts: {files}")
++
++            if re.match(".*I[0-9]{2,}$",path): # Double check and make sure it's a scan dir!
++                print(f"Incomplete folder: Id: {image_id} Path: {path}, artifacts: {files}")
++                shutil.rmtree(path)
+         
+-        break
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/pkg/callbacks/callback.py b/pkg/callbacks/callback.py
+index e76a254..e073d06 100644
+--- a/pkg/callbacks/callback.py
++++ b/pkg/callbacks/callback.py
+@@ -9,7 +9,7 @@ class Callback():
+     def on_train_epoch_start(self, context):
+         pass
+ 
+-    def on_train_batch_start(self):
++    def on_train_batch_start(self, context):
+         pass 
+ 
+     def on_train_batch_end(self, context, out, batch, batch_idx):
+@@ -33,4 +33,16 @@ class Callback():
+     def on_val_epoch_end(self, context):
+         pass
+ 
++    def on_test_start(self, context):
++        pass 
++
++    def on_test_batch_start(self, context):
++        pass 
++
++    def on_test_batch_end(self, context, out, batch, batch_idx):
++        pass 
++    
++    def on_test_end(self, context):
++        pass
++
+ 
+diff --git a/pkg/callbacks/checkpoint.py b/pkg/callbacks/checkpoint.py
+index 1b87322..6fabbcf 100644
+--- a/pkg/callbacks/checkpoint.py
++++ b/pkg/callbacks/checkpoint.py
+@@ -1,4 +1,6 @@
+ import torch
++import os 
++
+ from .callback import Callback
+ 
+ class CheckpointManager(Callback):
+@@ -17,6 +19,10 @@ class CheckpointManager(Callback):
+     def _is_better(self, current, best):
+         return (current < best) if self.mode == "min" else (current > best)
+ 
++    def on_fit_start(self, context):
++        # Create and set checkpoint save path
++        context["checkpoint_path"] = os.path.join(context["dir"], "model.ckpt")
++    
+     def on_val_epoch_end(self, ctx):
+         
+         if self.monitor not in ctx["metrics"]:
+@@ -27,9 +33,9 @@ class CheckpointManager(Callback):
+         if self.best_metric is None or self._is_better(current, self.best_metric):
+             self.best_metric = current
+             self.patience_counter = 0
+-            torch.save(ctx.model.state_dict(), self.save_path)
++            torch.save(ctx["model"].state_dict(), ctx["checkpoint_path"])
+         else:
+             self.patience_counter += 1
+ 
+         if self.patience > 0 and self.patience_counter >= self.patience:
+-            ctx.signals.should_stop = True
++            ctx["signals"]["early_stop"] = True
+diff --git a/pkg/callbacks/metrics.py b/pkg/callbacks/metrics.py
+index a8edefe..fd09e10 100644
+--- a/pkg/callbacks/metrics.py
++++ b/pkg/callbacks/metrics.py
+@@ -28,85 +28,60 @@ class Metrics(Callback):
+     
+     def on_train_epoch_start(self, context):
+         self.batch_count = 0
+-        
+-    def on_train_batch_end(self, context, out, batch, batch_idx):
++        self.current_train_metrics = {}
+ 
++    def on_train_batch_end(self, context, out, batch, batch_idx):
+         self.batch_count += 1
+-        for k,v in out.items():
+-            
+-            if not k in self.current_train_metrics:
+-                self.current_train_metrics[k] = v
+-            else:
+-                self.current_train_metrics[k] += v
+-      
+-    def on_train_epoch_end(self, context):
++        for k, v in out.items():
++            if hasattr(v, "detach"):
++                v = v.detach()
++            self.current_train_metrics[k] = self.current_train_metrics.get(k, 0) + v
+ 
++    def on_train_epoch_end(self, context):
+         for k, v in self.current_train_metrics.items():
+-
+-            avg = v
+-            if self.batch_count > 0:
+-                # Take average over batches
+-                avg /= self.batch_count
+-
+-            # Save them to history 
+-            if not k in self.history_train_metrics:
+-                self.history_train_metrics[k] = [avg]
+-            else:
+-                self.history_train_metrics[k].append(avg)
+-
+-            # Expose to context using prefix
+-            name = "train/"+k
+-            context["metrics"][name] = avg
++            avg = v / self.batch_count if self.batch_count > 0 else v
++            context["metrics"]["train/" + k] = avg
++            self.history_train_metrics.setdefault(k, []).append(avg)
+ 
+     def on_val_epoch_start(self, context):
+         self.batch_count = 0
++        self.current_val_metrics = {}
+ 
+     def on_val_batch_end(self, context, out, batch, batch_idx):
+         self.batch_count += 1
+-        for k,v in out.items():
+-            
+-            if not k in self.current_val_metrics:
+-                self.current_val_metrics[k] = v
+-            else:
+-                self.current_val_metrics[k] += v
++        for k, v in out.items():
++            if hasattr(v, "detach"):
++                v = v.detach()
++            self.current_val_metrics[k] = self.current_val_metrics.get(k, 0) + v
+ 
+     def on_val_epoch_end(self, context):
+-
+         for k, v in self.current_val_metrics.items():
++            avg = v / self.batch_count if self.batch_count > 0 else v
++            context["metrics"]["val/" + k] = avg
++            self.history_val_metrics.setdefault(k, []).append(avg)
+ 
+-            avg = v
+-            if self.batch_count > 0:
+-                # Take average over batches
+-                avg /= self.batch_count
++        # write CSV
++        keys = [k for k, _ in sorted(context["metrics"].items())]
++        vals = [context["metrics"][k] for k in keys]
+ 
+-            # Save them to history 
+-            if not k in self.history_val_metrics:
+-                self.history_val_metrics[k] = [avg]
+-            else:
+-                self.history_val_metrics[k].append(avg)
++        # convert tensors to scalars
++        def to_scalar(x):
++            if hasattr(x, "detach"):
++                x = x.detach().cpu()
++                if x.numel() == 1:
++                    return float(x)
++            return x
+ 
+-            # Expose to context using prefix
+-            name = "val/"+k
+-            context["metrics"][name] = avg
+-        
+-        # Dump to csv 
+-        with open(self.log_csv, "a") as f:
++        vals = [to_scalar(v) for v in vals]
+ 
++        with open(self.log_csv, "a") as f:
+             if self.first_epoch:
+                 self.first_epoch = False
+-
+-                # Write metrics names
+-                f.write(",".join([k for k,v in sorted(context["metrics"].items())]))
+-
+-            # Write metric values
+-            f.write(",".join([v for k,v in sorted(context["metrics"].items())]))
+-
+-        # Plot all metrics
+-        all_metrics = { ("train/"+k):v for k,v in self.history_train_metrics }
+-        for k,v in self.history_val_metrics:
+-            all_metrics["val/"+k] = v 
+-        plot_metrics( os.path.join(context["dir"], "metric_plots.png"), all_metrics)
+-
+-        # Clear metrics
+-        self.current_val_metrics = {}
+-        self.current_train_metrics = {}
++                f.write(",".join(keys) + "\n")
++            f.write(",".join(map(str, vals)) + "\n")
++
++    def on_fit_end(self, context):
++        all_metrics = { "train/"+k: v for k, v in self.history_train_metrics.items() }
++        for k, v in self.history_val_metrics.items():
++            all_metrics["val/" + k] = v
++        plot_metrics(os.path.join(context["dir"], "metric_plots.png"), all_metrics)
+diff --git a/pkg/data/datamodules.py b/pkg/data/datamodules.py
+index 506983f..ee77127 100644
+--- a/pkg/data/datamodules.py
++++ b/pkg/data/datamodules.py
+@@ -1,9 +1,10 @@
+-from .datasets import ADNIDataset, TransformDataset
++from .datasets import ADNIDataset, TransformDataset, DummyDataset
+ from .splitter import Splitter
+ from torch.utils.data import DataLoader, Subset
+ from .augmentation import build_augmentation
+ from .loaders import build_loader
+ import numpy as np 
++import pandas as pd
+ 
+ class DataModule:
+     """
+@@ -22,13 +23,16 @@ class DataModule:
+     def n_folds():
+         raise NotImplementedError
+     
+-    def train_loader(epoch):
++    def info():
++        raise NotImplementedError
++    
++    def train_dataloader(self,epoch):
+         raise NotImplementedError 
+ 
+-    def val_loader(epoch):
++    def val_dataloader(self):
+         raise NotImplementedError
+ 
+-    def test_loader(epoch):
++    def test_dataloader(self):
+         raise NotImplementedError
+ 
+ 
+@@ -62,8 +66,11 @@ class ADNIDataModule(DataModule):
+         # Create splitter
+         splitter = Splitter(range(len(self.ds)), self.ds.labels(), self.ds.groups(),**self.split_cfg)
+ 
++        # Save test indices
++        self._test_idx = splitter.test_split()
++        
+         # Create test dataset and loader
+-        test_dataset = Subset(self.ds, splitter.test_split())
++        test_dataset = Subset(self.ds, self._test_idx)
+         self._test_loader = build_loader(test_dataset, labels=None)
+ 
+         # Get train and validation indices for each fold
+@@ -106,6 +113,91 @@ class ADNIDataModule(DataModule):
+     def test_dataloader(self):
+         return self._test_loader
+ 
++    def info(self):
++
++        # Unique stratification keys
++        unique_keys = self.ds.df_multimodal["strat_key"].unique().tolist()
++
++        # Row and column multi indices for info dataframe
++        row_index = pd.MultiIndex.from_product([ 
++                        [f"Fold {i}" for i in range(len(self.folds)) ], 
++                        ["Train", "Val"]]
++                    )
++        col_index = pd.MultiIndex.append(
++            pd.MultiIndex.from_tuples( [ ("#", ""), ("%", "")]),
++            pd.MultiIndex.from_product([ ["Stratification Keys Distribution"], unique_keys])
++        )
++
++        # Create empty dataframe
++        df = pd.DataFrame(index=row_index, columns=col_index)
++
++        for i, fold in enumerate(self.folds):
++
++            train_idxs, val_idxs = fold
++            tot = len(train_idxs) + len(val_idxs)
++
++            # Sample counts
++            df.loc[(f"Fold {i}", "Train"), ("#","")] = len(train_idxs)
++            df.loc[(f"Fold {i}", "Val"), ("#","")] = len(val_idxs)
++
++            # As percentage
++            df.loc[(f"Fold {i}", "Train"), ("%","")] = float(len(train_idxs)/tot)
++            df.loc[(f"Fold {i}", "Val"), ("%","")] = float(len(val_idxs)/tot)
++
++            # Stratification keys distribution
++            train_keys_dist = self.ds.df_multimodal.loc[train_idxs, :].groupby("strat_key")["diagnosis"].count()/len(train_idxs)
++            val_keys_dist = self.ds.df_multimodal.loc[val_idxs, :].groupby("strat_key")["diagnosis"].count()/len(val_idxs)
++
++            for key in train_keys_dist.index:
++                df.loc[(f"Fold {i}", "Train"), ("Stratification Keys Distribution",key)] = train_keys_dist[key]
++
++            for key in val_keys_dist.index:
++                df.loc[(f"Fold {i}", "Val"), ("Stratification Keys Distribution", key)] = val_keys_dist[key]
++
++        # Add test dataset statistics 
++        df.loc[("Test",""),("#","")] = len(self._test_idx)
++        df.loc[("Test",""),("%","")] =  float(1)
++
++        test_keys_dist = self.ds.df_multimodal.loc[self._test_idx, :].groupby("strat_key")["diagnosis"].count()/len(self._test_idx)
++        
++        for key in test_keys_dist.index:
++            df.loc[("Test",""),("Stratification Keys Distribution", key)] = test_keys_dist[key]
++
++        # Round numbers 
++        df = df.apply(pd.to_numeric)
++        df = df.round(3)
++        return df
++
++
++class DummyDataModule(DataModule):
++
++    def __init__(self, *args, **kwargs):
++        self.ds = DummyDataset()
++        self._train_loader = DataLoader(self.ds)
++        self._val_loader = DataLoader(self.ds)
++        self._test_loader = DataLoader(self.ds)
++        self.train_labels = [1,1,1,1,1,1,1,1,1,1]
++
++    def setup(self):
++        pass 
++
++    def set_fold(self, fold):
++        pass 
++
++    def n_folds(self):
++        return 5
++    
++    def train_dataloader(self, epoch):
++        return self._train_loader
++
++    def val_dataloader(self):
++        return self._val_loader
++
++    def test_dataloader(self):
++        return self._test_loader
++
++    def info(self):
++        return "Dummy Dataset"
+ 
+ 
+     
+\ No newline at end of file
+diff --git a/pkg/data/datasets.py b/pkg/data/datasets.py
+index 38852eb..3008149 100644
+--- a/pkg/data/datasets.py
++++ b/pkg/data/datasets.py
+@@ -11,7 +11,6 @@ from pkg.utils.multimodality import create_multimodal_dataframe
+ 
+ from tqdm import tqdm
+ 
+-
+ class ADNIDataset(Dataset):
+     
+     def __init__(self,
+@@ -69,7 +68,7 @@ class ADNIDataset(Dataset):
+ 
+         # Add file paths
+         paths = []
+-        for index, row in tqdm(df_scan.iterrows()):
++        for index, row in df_scan.iterrows():
+ 
+             id = row["image_id"]
+             allowed_filenames = ['clean_w_masked_m' + id + '.nii', 
+@@ -114,7 +113,7 @@ class ADNIDataset(Dataset):
+ 
+         for mode in sorted(list(self.modalities.keys())):
+             
+-            if row[mode] is None:
++            if not isinstance(row[mode], str):
+                 scans.append(None)
+                 continue
+ 
+@@ -160,6 +159,19 @@ class TransformDataset(Dataset):
+             
+             return x, y
+         
++class DummyDataset(Dataset):
++
++    def __init__(self, *args, **kwargs):
++        pass 
++
++    def setup(self):
++        pass 
++
++    def __len__(self):
++        return 100
++
++    def __getitem__(self, index):
++        return 1,1
+         
+ # class ADNIDataset2(Dataset):
+ #     """
+diff --git a/pkg/models/base.py b/pkg/models/base.py
+index c0b0511..a52a2cd 100644
+--- a/pkg/models/base.py
++++ b/pkg/models/base.py
+@@ -1,26 +1,28 @@
+ import torch
+ import torch.nn as nn
+ 
+-from abc import ABC, abstractmethod
+ 
+ # Base class for models
+-class BaseModel(nn.Module, ABC):
+-    
+-    def __init__(self, cfg: dict):
+-        super().__init__()            # initializes nn.Module
+-        self.cfg = cfg                # store hyperparams, architecture params, etc.
+-        self._build()           # subclass must define this
++class BaseModel(nn.Module):
+ 
+-    @abstractmethod
+-    def _build(self):
++    def set_criterion(self, criterion):
+         """
+-        Read self.cfg to:
+-          - construct layers
+-          - assign them to self (e.g. self.net = nn.Sequential(...))
++        Sets criterion to be used.
++        """
++        self.criterion = criterion
++
++    def train_batch(self, batch, batch_index) -> tuple[torch.Tensor, dict]:
++        """
++        Trains model on a batch. Returns the loss tensor
++        and a dict with metrics.
++        """
++        pass 
++
++    def validate_batch(self, batch, batch_index) -> dict:
++        """
++        Validates the model on a batch. Returns dict with metrics.
+         """
+         pass
+ 
+-    @abstractmethod
+-    def forward(self, x):
+-        """Define the forward pass. Must return model output."""
+-        pass
+\ No newline at end of file
++    def test_batch(self, batch, batch_index) -> dict:
++        return self.validate_batch(batch, batch_index)
+\ No newline at end of file
+diff --git a/pkg/models/dummy.py b/pkg/models/dummy.py
+index d4dcd77..8b34e71 100644
+--- a/pkg/models/dummy.py
++++ b/pkg/models/dummy.py
+@@ -1,12 +1,23 @@
++from .base import BaseModel
+ import torch
+ import torch.nn as nn
+-import numpy as np
+-import torch.nn.functional as F
+ 
+-class DummyModel(nn.Module):
++class Dummy(BaseModel):
+ 
+-    def __init__(self, **params):
++    def __init__(self, *args, **kwargs):
++        super().__init__()
++        self._dummy = nn.Parameter(torch.zeros(1)) 
+         pass 
+ 
+-    def forward(self, x):
+-        pass 
+\ No newline at end of file
++    def forward(self, X):
++        pass 
++
++    def train_batch(self, batch, batch_index):
++        return torch.zeros((), requires_grad=True), {"loss":0.5}
++
++    def validate_batch(self, batch, batch_index):
++        return {"loss":0.1}
++
++    def test_batch(self, batch, batch_index):
++        return {"preds":torch.tensor([1,2,1,2], requires_grad=False), "targets":torch.tensor([1,2,1,2], requires_grad=False)}
++    
+\ No newline at end of file
+diff --git a/pkg/models/model_resnet18.py b/pkg/models/model_resnet18.py
+index c784296..c2565f1 100644
+--- a/pkg/models/model_resnet18.py
++++ b/pkg/models/model_resnet18.py
+@@ -3,37 +3,7 @@ import torch.nn as nn
+ import torch.nn.functional as F
+ 
+ from .base import BaseModel
+-
+-class SAM3d(nn.Module):
+-    """
+-    3d Spatial attention module
+-    """
+-    
+-    def __init__(self):
+-        super().__init__()
+-        
+-        # (7x7x7) convolutional layer
+-        self.conv = nn.Conv3d(2,1,kernel_size=7,padding=7//2)  # mantain original size
+-        
+-    def forward(self, x):
+-        
+-        # Assume x has size (N,C,D,H,W)
+-        
+-        # Take max in the channel dimension. Size: (N,1,D,H,W)
+-        channel_max = torch.max(x, 1, keepdim=True)[0]
+-        
+-        # Take average in the channel dimension: Size (N,1,D,H,W)
+-        channel_avg = torch.sum(x, 1, keepdim=True)/x.shape[1]
+-        
+-        # Concatenate vectors: Size (N,2,D,H,W)
+-        m = torch.concat((channel_avg, channel_max), dim=1)
+-        
+-        # Apply convolution and sigmoid. Size (N,1,D,H,W)
+-        m = F.sigmoid(self.conv(m))
+-        
+-        # Element wise multiplication 
+-        return m*x
+-
++from .components import SAM3d
+ 
+ class BasicBlock1(nn.Module):
+     
+@@ -42,36 +12,30 @@ class BasicBlock1(nn.Module):
+         
+         self.residual1 = nn.Sequential(
+             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_in),
++            nn.GroupNorm(8, channel_in),
+             nn.ReLU(),
+             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_in),
++            nn.GroupNorm(8, channel_in),
+             SAM3d()
+         )
+         
+         self.residual2 = nn.Sequential(
+             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_in),
++            nn.GroupNorm(8, channel_in),
+             nn.ReLU(),
+             nn.Conv3d(channel_in, channel_in, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_in),
++            nn.GroupNorm(8, channel_in),
+             SAM3d()
+         )
+         
+     def forward(self, x):
+         
+-        # First residual + skip connection, then activation
+         x = F.relu(self.residual1(x) + x)
+-        
+-        # Second residual + skip connection, then activation
+         x = F.relu(self.residual2(x) + x)
+         
+         return x
+ 
+ class BasicBlock2(nn.Module):
+-    """
+-    Same as BasicBlock1 but doubles output channels and halves spatial dimensions
+-    """
+     
+     def __init__(self, channel_in):
+         super().__init__()
+@@ -80,31 +44,27 @@ class BasicBlock2(nn.Module):
+         
+         self.residual1 = nn.Sequential(
+             nn.Conv3d(channel_in, channel_out, 3, stride=2, padding=3//2),
+-            nn.BatchNorm3d(channel_out),
++            nn.GroupNorm(8, channel_out),
+             nn.ReLU(),
+             nn.Conv3d(channel_out, channel_out, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_out),
++            nn.GroupNorm(8, channel_out),
+             SAM3d()
+         )
+         
+-        # First skip connection (linear map)
+         self.skip1 = nn.Conv3d(channel_in, channel_out, 1, stride=2, padding=0)
+         
+         self.residual2 = nn.Sequential(
+             nn.Conv3d(channel_out, channel_out, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_out),
++            nn.GroupNorm(8, channel_out),
+             nn.ReLU(),
+             nn.Conv3d(channel_out, channel_out, 3, padding=3//2),
+-            nn.BatchNorm3d(channel_out),
++            nn.GroupNorm(8, channel_out),
+             SAM3d()
+         )
+         
+     def forward(self, x):
+         
+-        # First residual + skip connection, then activation
+         x = F.relu(self.residual1(x) + self.skip1(x))
+-        
+-        # Second residual + skip connection, then activation
+         x = F.relu(self.residual2(x) + x)
+         
+         return x
+@@ -112,42 +72,25 @@ class BasicBlock2(nn.Module):
+     
+ class ResNet18(BaseModel):
+     
+-    def _build(self):
++    def __init__(self, num_classes=3, initial_filters=8, dropout=0):
+         
+-        # Configuration
+-        num_classes  = int(self.cfg.get('num_classes', 3))
+-        initial_filters = int(self.cfg.get('init_filters', 8))
+-        dropout = float(self.cfg.get('dropout', 0))
+-        avgpool_kernel_size = 2
+-        
+-        # initial block
++        super().__init__()
+         self.initial_block = nn.Sequential(
+             nn.Conv3d(1, initial_filters, 7, padding=7//2),
+-            nn.BatchNorm3d(initial_filters),
++            nn.GroupNorm(8, initial_filters),
+             nn.ReLU()
+-        )   # (inital_filters, D, H, W)
+-        
+-        # pooling
+-        self.pool1 = nn.MaxPool3d(2)                # (initial_filters, floor(D/2), floor(H/2), floor(W/2))
++        )
+         
+-        # basic block 1
+-        self.bb_1 = BasicBlock1(initial_filters)    # shape unchanged
++        self.pool1 = nn.MaxPool3d(2)
+         
+-        # basic blocks 2 - 4
+-        self.bb_2 = BasicBlock2(initial_filters)    # (initial_filters*2, floor(D/4), floor(H/4), floor(W/4))
+-        self.bb_3 = BasicBlock2(initial_filters*2)  # (initial_filters*4, floor(D/8), floor(H/8), floor(W/8))
+-        self.bb_4 = BasicBlock2(initial_filters*4)  # (initial_filters*8), floor(D/16), floor(H/16), floor(W/16))
++        self.bb_1 = BasicBlock1(initial_filters)
++        self.bb_2 = BasicBlock2(initial_filters)
++        self.bb_3 = BasicBlock2(initial_filters*2)
++        self.bb_4 = BasicBlock2(initial_filters*4)
+ 
+-        # batch norm
+-        self.norm = nn.BatchNorm3d(initial_filters*8)
+-        
+-        # avg pool
+-        self.avgpool = nn.AvgPool3d(avgpool_kernel_size) # out: ? (initial_filters*8, floor(D/32), floor(H/32), floor(W/32))
+-        
+-        # Dropout layer
++        self.norm = nn.GroupNorm(8, initial_filters*8)
++        self.avgpool = nn.AvgPool3d(2)
+         self.dropout = nn.Dropout(dropout)
+-        
+-        # final fc layer (hardcoded dims) 384 for input size 79*95*79, 1728 for input size 91*109*91
+         self.fc1 = nn.Linear(1728, num_classes)
+         
+     def forward(self, x):
+@@ -160,17 +103,24 @@ class ResNet18(BaseModel):
+         x = self.bb_4(x)
+         
+         x = self.avgpool(self.norm(x))
+-        
+         x = x.view(x.size(0), -1)
+-        
+         x = self.dropout(x)
+         
+         return self.fc1(x)
+-    
+-if __name__ == "__main__":
+-    
+-    model = ResNet18({"dropout":0.5})
+-    print(model)
+-    sample = torch.randn(1, 1, 91, 109, 91)
+-    out = model(sample)
+-    print(out.shape)
+\ No newline at end of file
++
++    def train_batch(self, batch, batch_idx):
++        X,y = batch
++        y_hat = self.forward(X)
++        loss = self.criterion(y_hat, y)
++        return loss, {"loss":float(loss.item())}
++
++    def validate_batch(self, batch, batch_idx):
++        X,y = batch
++        y_hat = self.forward(X)
++        loss = self.criterion(y_hat, y)
++        return {"loss":float(loss.item())}
++
++    def test_batch(self, batch, batch_idx):
++        X,y = batch
++        y_hat = self.forward(X)
++        return {"preds":y_hat, "targets":y}
+diff --git a/pkg/models/registry.py b/pkg/models/registry.py
+deleted file mode 100644
+index b8b704d..0000000
+--- a/pkg/models/registry.py
++++ /dev/null
+@@ -1,27 +0,0 @@
+-# Register models here by importing class and adding it to registry
+-from .model_simple_3dcnn import Simple3DCNN
+-from .model_custom_3dcnn import Custom3DCNN
+-from .model_simple_3dcnn_gradcam import GradCAM3DCNN 
+-from .model_resnet18 import ResNet18
+-from .model_resnet14 import ResNet14
+-from .model_mynet import MyNet
+-from .model_xresnet import XResNet
+-from .model_agxresnet import AGXResNet
+-
+-_MODEL_REGISTRY = {
+-                    'simple_3dcnn':Simple3DCNN,
+-                    'custom_3dcnn':Custom3DCNN,
+-                    'custom_3dcnn_gradcam':GradCAM3DCNN,
+-                    'resnet18':ResNet18,
+-                    'resnet14':ResNet14,
+-                    'mynet':MyNet,
+-                    'xresnet':XResNet,
+-                    'agxresnet': AGXResNet,
+-                  }
+-
+-# Returns model's class given the model's name
+-def get_model(name):
+-    if name in _MODEL_REGISTRY:
+-        return _MODEL_REGISTRY[name]
+-    else:
+-        return None
+\ No newline at end of file
+diff --git a/pkg/tasks/classification.py b/pkg/tasks/classification.py
+deleted file mode 100644
+index 9bf20fa..0000000
+--- a/pkg/tasks/classification.py
++++ /dev/null
+@@ -1,49 +0,0 @@
+-from .task import Task
+-
+-class ClassificationTask(Task):
+-    """
+-    Basic task class for classification.
+-    """
+-    
+-    def __init__(self, output_mode):
+-        pass        
+-
+-    def setup(self, model, criterion, optimizer):
+-        self.model = model
+-        self.optimizer = optimizer
+-        
+-    
+-    def train_batch(self, batch):
+-        
+-        # Get features and labels
+-        X, y = batch 
+-        
+-        # Zero grad 
+-        self.optim.zero_grad()
+-        
+-        # Forward 
+-        y_hat = self.model(X)
+-
+-        # Loss
+-        loss = self.criterion(y_hat, y)
+-        
+-        # Backwards pass 
+-        loss.backward()
+-        
+-        # Optimizer step
+-        self.optim.step()
+-        
+-        return {"loss":float(loss.item()), "logits":y_hat.detach(), "targets":y.detach()}
+-    
+-    def validate_batch(self, batch):
+-        
+-        # Get features and labels
+-        X, y = batch 
+-        
+-        # Forward + logits
+-        y_hat = self.model(X)
+-
+-        # Loss
+-        loss = self.criterion( y_hat, y)
+-     
+-        return {"loss":float(loss.item()), "logits":y_hat.detach(), "targets":y.detach()}
+\ No newline at end of file
+diff --git a/pkg/tasks/dummytask.py b/pkg/tasks/dummytask.py
+deleted file mode 100644
+index 05443ce..0000000
+--- a/pkg/tasks/dummytask.py
++++ /dev/null
+@@ -1,22 +0,0 @@
+-from .task import Task
+-
+-class DummyTask(Task):
+-
+-    def __init__(self):
+-        self.count = 0
+-        pass
+-    
+-    def setup(self, model, criterion, optimizer):
+-        self.model = model
+-        self.criterion = criterion
+-        self.optimizer = optimizer
+-
+-        print("Dummy task init")
+-    
+-    def train_batch(self, batch):
+-        print("Train batch!")
+-        return {"acc":0.1*self.count**2, "loss":(1 - 0.1*self.count) }
+-    
+-    def validate_batch(self, batch):
+-        print("Validate batch")
+-        return {"acc":0.45*self.count**1.5, "loss":(2 - 0.2*self.count**2) }
+\ No newline at end of file
+diff --git a/pkg/tasks/task.py b/pkg/tasks/task.py
+deleted file mode 100644
+index 545e9a5..0000000
+--- a/pkg/tasks/task.py
++++ /dev/null
+@@ -1,28 +0,0 @@
+-
+-class Task():
+-    """
+-    Base task class. Handles training, evaluation and testing of the model
+-    on single batches of data.
+-    """
+-    def __init__(self):
+-        raise NotImplementedError
+-    
+-    def setup(self, model, criterion, optimizer):
+-        self.model = model
+-        self.criterion = criterion
+-        self.optimizer = optimizer
+-    
+-    def train_batch(self, batch):
+-        raise NotImplementedError
+-    
+-    def validate_batch(self, batch):
+-        raise NotImplementedError
+-    
+-    def test_batch(self, batch):
+-        return self.validate_batch(batch)
+-
+-    def get_optimizer(self):
+-        return self.optim
+-    
+-    def get_model(self):
+-        return self.model
+diff --git a/pkg/training/criterion.py b/pkg/training/criterion.py
+index 5b07f52..a06d0c3 100644
+--- a/pkg/training/criterion.py
++++ b/pkg/training/criterion.py
+@@ -10,17 +10,22 @@ def build_criterion(cfg, train_labels=None, device="cpu"):
+     name = cfg["name"]
+ 
+     if name == "CrossEntropyLoss":
+-        return nn.CrossEntropyLoss(**cfg["params"])
+ 
+-    elif name == "WeightedCrossEntropyLoss":
+-        if train_labels is None:
+-            raise ValueError("WeightedCrossEntropyLoss requires train_labels.")
+-        
+-        counts = np.bincount(train_labels)
+-        weights = 1.0 / counts
+-        w = torch.tensor(weights, dtype=torch.float32, device=device)
+-        
+-        return nn.CrossEntropyLoss(weight=w, **cfg["params"])
++        if "params" in cfg and "weights" in cfg["params"]:
++            
++            if cfg["weights"] == "auto":
++
++                if train_labels is None:
++                    raise ValueError("WeightedCrossEntropyLoss requires train_labels.")
++                
++                counts = np.bincount(train_labels)
++                weights = 1.0 / counts
++                w = torch.tensor(weights, dtype=torch.float32, device=device)
++                
++                return nn.CrossEntropyLoss(weight=w, **cfg["params"])
++        else:
++            return nn.CrossEntropyLoss(**cfg["params"])
++  
+ 
+     elif name == "BCEWithLogitsLoss":
+         return nn.BCEWithLogitsLoss(**cfg["params"])
+diff --git a/pkg/training/trainer.py b/pkg/training/trainer.py
+index ae079ce..23abdc3 100644
+--- a/pkg/training/trainer.py
++++ b/pkg/training/trainer.py
+@@ -1,5 +1,6 @@
+ 
+ import torch 
++from tqdm import tqdm
+ 
+ class CallbacksList:
+     def __init__(self, callbacks):
+@@ -13,6 +14,7 @@ class CallbacksList:
+             fn = getattr(cb, name, None)
+             if fn is None:
+                 continue
++            fn(*args, **kwargs)
+ 
+     def on_fit_start(self, context):
+         self._call("on_fit_start", context)
+@@ -44,22 +46,47 @@ class CallbacksList:
+     def on_val_epoch_end(self, context):
+         self._call("on_val_epoch_end", context)
+ 
++    def on_test_start(self, context):
++        self._call("on_test_start", context) 
++
++    def on_test_batch_start(self, context):
++        self._call("on_test_batch_start", context)
++
++    def on_test_batch_end(self, context, out, batch, batch_idx):
++        self._call("on_test_batch_end", context, out, batch, batch_idx)
++    
++    def on_test_end(self, context):
++        self._call("on_test_end", context)
++
+ 
+ class Trainer:
+ 
+-    def __init__(self, task, datamodule, callbacks, max_epochs=100):
++    def __init__(self, model, optimizer, datamodule, callbacks, 
++                 max_epochs=100,  
++                 dir=None,
++                 automatic_optimization=True,
++                 accum_steps=1):
+ 
+-        self.task = task
++        self.model = model
++        self.optimizer = optimizer
+         self.datamodule = datamodule
+         self.max_epochs = max_epochs
++        self.accum_steps = accum_steps
++        self.automatic_optimization = automatic_optimization
+         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ 
++        # Move model to device
++        self.model = self.model.to(self.device)
++
+         # Create context
+-        self.ctx = { "model":task.model,
+-                     "optimizer":task.optimizer,
+-                         "signals":{ 
+-                             "early_stop":False
+-                        } 
++        self.ctx = { 
++                     "model":self.model,
++                     "optimizer":self.optimizer,
++                     "metrics":{},
++                     "signals":{ 
++                         "early_stop":False
++                      },
++                     "dir":dir, 
+                     }
+ 
+         # Create callbacks list
+@@ -69,47 +96,83 @@ class Trainer:
+ 
+         self.cb.on_fit_start(self.ctx)
+ 
+-        for epoch in range(self.epochs):
++        for epoch in range(1,self.max_epochs+1):
+ 
+             # Stop if early stop is signalled
+             if self.ctx["signals"]["early_stop"]:
+                 break 
+ 
+-            # Train 
++            print(f"Epoch {epoch}")
++
++            # Train
++            self.model.train()
+             self.cb.on_train_epoch_start(self.ctx)
+             self.train_epoch(epoch)
+             self.cb.on_train_epoch_end(self.ctx)
+ 
+             # Validation
+-            self.cb.on_val_epoch_start(self.ctx)
+-            self.validate_epoch(epoch)
+-            self.cb.on_val_epoch_end(self.ctx)
++            self.model.eval()
++            with torch.no_grad():
++                self.cb.on_val_epoch_start(self.ctx)
++                self.validate_epoch(epoch)
++                self.cb.on_val_epoch_end(self.ctx)
+             
+         self.cb.on_fit_end(self.ctx)
+ 
++    def test(self):
++        
++        self.cb.on_test_start(self.ctx)
++
++        for i, batch in enumerate(self.datamodule.test_dataloader()):
++
++            self.cb.on_test_batch_start(self.ctx)
++            out = self.ctx["model"].test_batch(batch, i)
++            self.cb.on_test_batch_end(self.ctx, out, batch, i)
++
++        self.cb.on_test_end(self.ctx)
++
+     def train_epoch(self, epoch):
+         
++        # Gradient accumulation steps
++        k = self.accum_steps
++
++        # Train loader
+         train_loader = self.datamodule.train_dataloader(epoch)
+ 
++        if self.automatic_optimization:
++            self.optimizer.zero_grad()
++
+         for i, batch in enumerate(train_loader):
+ 
+             # Move tensors to device
+             batch = (batch[0].to(self.device), batch[1].to(self.device))
+ 
+             self.cb.on_train_batch_start(self.ctx)
+-            out = self.task.train_batch(batch)
+-            self.cb.on_train_batch_end(self.ctx, out, batch, i)
++            loss, step_out = self.model.train_batch(batch, i)
++
++            if self.automatic_optimization:
++                (loss/k).backward()
++
++            self.cb.on_train_batch_end(self.ctx, step_out, batch, i)
++
++            if self.automatic_optimization and (i+1)%k == 0:
++                # Gradient clipping ?
++                #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
++                self.optimizer.step()
++                self.optimizer.zero_grad()
++            
++        if self.automatic_optimization and (i+1)%k != 0:
++            self.optimizer.step()
+ 
+     def validate_epoch(self, epoch):
+ 
+-        val_loader = self.datamodule.val_dataloader(epoch)
++        val_loader = self.datamodule.val_dataloader()
+ 
+         for i, batch in enumerate(val_loader):
+ 
+             # Move tensors to device
+             batch = (batch[0].to(self.device), batch[1].to(self.device))
+-            
+-            self.cb.on_val_batch_start(self.ctx)
+-            out = self.task.validate_batch(batch)
+-            self.cb.on_val_batch_end(self.ctx, out, batch, i)
+ 
++            self.cb.on_val_batch_start(self.ctx)
++            step_out = self.model.validate_batch(batch, i)
++            self.cb.on_val_batch_end(self.ctx, step_out, batch, i)
+diff --git a/pkg/utils/diagnosis_matching.py b/pkg/utils/diagnosis_matching.py
+index 566c6ac..d469c8f 100644
+--- a/pkg/utils/diagnosis_matching.py
++++ b/pkg/utils/diagnosis_matching.py
+@@ -24,7 +24,7 @@ def match_diagnosis(df_scan, df_diagnostic, tolerance):
+         # Keep track of original cols to preserve (+ diagnosis and exam date)
+         cols_to_keep = df_scan.columns.tolist() + ["diagnosis", "exam_date"]
+ 
+-        for subj in tqdm(df_scan["subject_id"].unique()):
++        for subj in df_scan["subject_id"].unique():
+ 
+             # Get subject visits and scans
+             subj_vis = df_diagnostic[df_diagnostic["PTID"] == subj].copy()
+diff --git a/pkg/utils/multimodality.py b/pkg/utils/multimodality.py
+index 632b2ef..53070eb 100644
+--- a/pkg/utils/multimodality.py
++++ b/pkg/utils/multimodality.py
+@@ -149,7 +149,7 @@ def create_multimodal_dataframe(df_scans, tolerance=180, passes=2):
+         # All modalities
+         modalities = sorted(df_scans["modality"].unique())
+ 
+-        for group, indices in tqdm(df_scans.groupby(["subject_id", "diagnosis"]).groups.items()):
++        for group, indices in df_scans.groupby(["subject_id", "diagnosis"]).groups.items():
+             
+             # Get scans of current group
+             scans = df_scans.loc[indices]
+diff --git a/scripts/train.py b/scripts/train.py
+deleted file mode 100644
+index 8b648dc..0000000
+--- a/scripts/train.py
++++ /dev/null
+@@ -1,75 +0,0 @@
+-
+-from adni_mri_classification.training.trainer import Trainer
+-from adni_mri_classification.training.scheduler import Scheduler
+-from adni_mri_classification.training.checkpoint import CheckpointManager
+-from adni_mri_classification.data.splits import Splitter
+-from adni_mri_classification.data.datasets import ADNIDataset, TransformDataset
+-from adni_mri_classification.data.augmentation import Augmentation
+-
+-from torch.utils.data import Subset, DataLoader
+-
+-
+-def main(epochs):
+-    
+-    # Full dataset
+-    ds = ADNIDataset(...)
+-    
+-    # Create splitter 
+-    splitter = Splitter(...)
+-    
+-    # Test dataset
+-    test_idx = splitter.test_split()
+-    test_ds = Subset(ds, test_idx)
+-    test_loader = DataLoader(test_ds, ...)
+-    
+-    # Create augmentation
+-    augmentation = Augmentation(...)
+-
+-    for fold, (train_idx, val_idx) in enumerate(splitter.cv_split()):
+-        
+-        # Train and validation datasets
+-        train_ds = TransformDataset(Subset(ds, train_idx), transform=...)
+-        val_ds = Subset(ds, val_idx)
+-        
+-        # Assert there is no subject level leakage
+-        assert set(ds.groups[train_idx]).isdisjoint(set(ds.groups[val_idx]))
+-        assert set(ds.groups[train_idx]).isdisjoint(set(ds.groups[test_idx]))
+-        
+-        # initialize model, checkpoint manager, task
+-        task = Task(...)
+-        scheduler  = Scheduler(...)
+-        trainer = Trainer(...)
+-        checkpoint_manager = CheckpointManager(...)
+-        
+-        # loop
+-        for epoch in range(epochs):
+-
+-            # train one epoch, update checkpoint, log metrics		
+-            trainer.train_epoch(epoch)
+-            
+-            # update checkpoint manager: stores historical metrics, saves best model state, implements patience
+-            if checkpoint_manager.update(epoch, trainer.current_metrics()):
+-                checkpoint_manager.save_state(model.state_dict())
+-            
+-            # stop if needed						
+-            if checkpoint_manager.early_stop():
+-                break
+-            
+-        # Save training+val metrics to file (e.g. losses.csv)		
+-        checkpoint_manager.save_metrics("/path/to/file")
+-        
+-        # Get best model checkpoint					
+-        best_model_state = checkpoint_manager.best_state()
+-        
+-        # Load best state and evaluate on test set
+-        model.load(best_model_state)
+-        
+-        model.eval()
+-        test_metric = TestMetric()
+-        
+-        for batch in test_dataloader.iterator:
+-            X, y = batch
+-            test_metric.update(task.test_batch())
+-        
+-        # save/log test metrics
+-        ...
+diff --git a/test.ipynb b/test.ipynb
+index 3fc621a..e30a813 100644
+--- a/test.ipynb
++++ b/test.ipynb
+@@ -25,12 +25,12 @@
+      "name": "stdout",
+      "output_type": "stream",
+      "text": [
+-      "{'datamodule': {'class': 'pkg.data.datamodules.ADNIDataModule', 'args': {'data': {'data_dir': '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/data/', 'scan_csv': '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/dataset_multimodal.csv', 'diagnostic_csv': '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/DXSUM_02Feb2026.csv', 'diagnosis': [1, 2, 3], 'tolerance': 180, 'modalities': {'MRI': ['MRI-T1-3T', 'MRI-T1-1.5T'], 'PET': ['PET-FDG']}}, 'split': {'mode': 'kfold', 'seed': 42, 'folds': 5, 'test_size': 0.1, 'val_size': 0.2}, 'loader': {'batch_size': 4, 'weighted_sampling': True}, 'transform': [{'random_flip': {'p': 0.5}}, {'random_affine': {'p': 0.5, 'degrees': 5, 'translation': 5}}, {'random_noise': {'p': 0.2, 'std': 0.02}}]}}, 'model': {'class': 'pkg.models.model_resnet18.ResNet18', 'args': {'cfg': {'init_filters': 8, 'dropout': 0.3, 'num_classes': 3}}}, 'optimizer': {'name': 'AdamW', 'params': {'lr': 0.0001, 'weight_decay': 0.01}}, 'criterion': {'name': 'CrossEntropyLoss', 'weights': 'auto', 'params': {}}, 'task': {'class': 'pkg.tasks.dummytask.DummyTask', 'args': {}}, 'trainer': {'max_epochs': 10, 'device': 'cuda'}, 'callbacks': [{'class': 'pkg.callbacks.metrics.Metrics', 'args': {}}, {'class': 'pkg.callbacks.checkpoint.CheckpointManager', 'args': {'monitor': 'val/loss', 'mode': 'min', 'patience': 10}}, {'class': 'pkg.callbacks.scheduler.SchedulerPolicy', 'args': {'name': 'ReduceLROnPlateau', 'params': {}}}]}\n"
++      "{'datamodule': {'class': 'pkg.data.datamodules.ADNIDataModule', 'args': {'data': {'data_dir': '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/data/', 'scan_csv': '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/dataset_multimodal.csv', 'diagnostic_csv': '/project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/DXSUM_02Feb2026.csv', 'diagnosis': [1, 2, 3], 'tolerance': 180, 'modalities': {'MRI': ['MRI-T1-1.5T']}}, 'split': {'mode': 'kfold', 'seed': 42, 'folds': 5, 'test_size': 0.1, 'val_size': 0.2}, 'loader': {'batch_size': 4, 'weighted_sampling': False}, 'transform': [{'random_flip': {'p': 0.5}}, {'random_affine': {'p': 0.5, 'degrees': 5, 'translation': 5}}, {'random_noise': {'p': 0.2, 'std': 0.02}}]}}, 'model': {'class': 'pkg.models.model_resnet18.ResNet18', 'args': {'initial_filters': 8, 'dropout': 0.3, 'num_classes': 3}}, 'optimizer': {'name': 'AdamW', 'params': {'lr': 0.0001, 'weight_decay': 0.01}}, 'criterion': {'name': 'CrossEntropyLoss', 'weights': 'auto', 'params': {}}, 'trainer': {'max_epochs': 10, 'accum_steps': 8}, 'callbacks': [{'class': 'pkg.callbacks.metrics.Metrics', 'args': {}}, {'class': 'pkg.callbacks.checkpoint.CheckpointManager', 'args': {'monitor': 'val/loss', 'mode': 'min', 'patience': 10}}, {'class': 'pkg.callbacks.scheduler.SchedulerPolicy', 'args': {'name': 'ReduceLROnPlateau', 'params': {}}}]}\n"
+      ]
+     }
+    ],
+    "source": [
+-    "path = \"./test.yaml\"\n",
++    "path = \"./config.yaml\"\n",
+     "\n",
+     "# Read configuration file\n",
+     "with open(path, 'r') as f:\n",
+@@ -58,43 +58,10 @@
+      "name": "stdout",
+      "output_type": "stream",
+      "text": [
+-      "Matching scans to diagnoses...\n"
+-     ]
+-    },
+-    {
+-     "name": "stderr",
+-     "output_type": "stream",
+-     "text": [
+-      "100%|██████████| 2153/2153 [00:12<00:00, 166.70it/s]\n"
+-     ]
+-    },
+-    {
+-     "name": "stdout",
+-     "output_type": "stream",
+-     "text": [
+-      "Verifying scans available in dir...\n"
+-     ]
+-    },
+-    {
+-     "name": "stderr",
+-     "output_type": "stream",
+-     "text": [
+-      "13628it [00:10, 1349.22it/s]\n"
+-     ]
+-    },
+-    {
+-     "name": "stdout",
+-     "output_type": "stream",
+-     "text": [
++      "Matching scans to diagnoses...\n",
++      "Verifying scans available in dir...\n",
+       "Creating multimodal samples...\n"
+      ]
+-    },
+-    {
+-     "name": "stderr",
+-     "output_type": "stream",
+-     "text": [
+-      "100%|██████████| 2467/2467 [00:16<00:00, 145.66it/s]\n"
+-     ]
+     }
+    ],
+    "source": [
+@@ -107,79 +74,8 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": null,
+-   "id": "9bbe5a79",
+-   "metadata": {},
+-   "outputs": [
+-    {
+-     "name": "stdout",
+-     "output_type": "stream",
+-     "text": [
+-      "Dummy task init\n",
+-      "Ok\n"
+-     ]
+-    },
+-    {
+-     "ename": "TypeError",
+-     "evalue": "cannot unpack non-iterable NoneType object",
+-     "output_type": "error",
+-     "traceback": [
+-      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+-      "\u001b[0;31mTypeError\u001b[0m                                 Traceback (most recent call last)",
+-      "Cell \u001b[0;32mIn[5], line 25\u001b[0m\n\u001b[1;32m     22\u001b[0m \u001b[38;5;28mprint\u001b[39m(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mOk\u001b[39m\u001b[38;5;124m\"\u001b[39m)\n\u001b[1;32m     24\u001b[0m \u001b[38;5;66;03m# Fit model \u001b[39;00m\n\u001b[0;32m---> 25\u001b[0m \u001b[43mtrainer\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mfit\u001b[49m\u001b[43m(\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m     27\u001b[0m \u001b[38;5;66;03m# Load best model \u001b[39;00m\n\u001b[1;32m     28\u001b[0m \n\u001b[1;32m     29\u001b[0m \u001b[38;5;66;03m# Test\u001b[39;00m\n",
+-      "File \u001b[0;32m/project/aereditato/cestari/adni-mri-classification/pkg/training/trainer.py:77\u001b[0m, in \u001b[0;36mTrainer.fit\u001b[0;34m(self)\u001b[0m\n\u001b[1;32m     75\u001b[0m \u001b[38;5;66;03m# Train \u001b[39;00m\n\u001b[1;32m     76\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mcb\u001b[38;5;241m.\u001b[39mon_train_epoch_start(\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mctx)\n\u001b[0;32m---> 77\u001b[0m \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mtrain_epoch\u001b[49m\u001b[43m(\u001b[49m\u001b[43mepoch\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m     78\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mcb\u001b[38;5;241m.\u001b[39mon_train_epoch_end(\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mctx)\n\u001b[1;32m     80\u001b[0m \u001b[38;5;66;03m# Validation\u001b[39;00m\n",
+-      "File \u001b[0;32m/project/aereditato/cestari/adni-mri-classification/pkg/training/trainer.py:91\u001b[0m, in \u001b[0;36mTrainer.train_epoch\u001b[0;34m(self, epoch)\u001b[0m\n\u001b[1;32m     87\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21mtrain_epoch\u001b[39m(\u001b[38;5;28mself\u001b[39m, epoch):\n\u001b[1;32m     89\u001b[0m     train_loader \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mdatamodule\u001b[38;5;241m.\u001b[39mtrain_dataloader(epoch)\n\u001b[0;32m---> 91\u001b[0m     \u001b[38;5;28;01mfor\u001b[39;00m i, batch \u001b[38;5;129;01min\u001b[39;00m \u001b[38;5;28menumerate\u001b[39m(train_loader):\n\u001b[1;32m     93\u001b[0m         \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mcb\u001b[38;5;241m.\u001b[39mon_train_batch_start(\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mctx)\n\u001b[1;32m     94\u001b[0m         out \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mtask\u001b[38;5;241m.\u001b[39mtrain_batch(batch)\n",
+-      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/utils/data/dataloader.py:733\u001b[0m, in \u001b[0;36m_BaseDataLoaderIter.__next__\u001b[0;34m(self)\u001b[0m\n\u001b[1;32m    730\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_sampler_iter \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n\u001b[1;32m    731\u001b[0m     \u001b[38;5;66;03m# TODO(https://github.com/pytorch/pytorch/issues/76750)\u001b[39;00m\n\u001b[1;32m    732\u001b[0m     \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_reset()  \u001b[38;5;66;03m# type: ignore[call-arg]\u001b[39;00m\n\u001b[0;32m--> 733\u001b[0m data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_next_data\u001b[49m\u001b[43m(\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m    734\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_num_yielded \u001b[38;5;241m+\u001b[39m\u001b[38;5;241m=\u001b[39m \u001b[38;5;241m1\u001b[39m\n\u001b[1;32m    735\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m (\n\u001b[1;32m    736\u001b[0m     \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_dataset_kind \u001b[38;5;241m==\u001b[39m _DatasetKind\u001b[38;5;241m.\u001b[39mIterable\n\u001b[1;32m    737\u001b[0m     \u001b[38;5;129;01mand\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_IterableDataset_len_called \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m\n\u001b[1;32m    738\u001b[0m     \u001b[38;5;129;01mand\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_num_yielded \u001b[38;5;241m>\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_IterableDataset_len_called\n\u001b[1;32m    739\u001b[0m ):\n",
+-      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/utils/data/dataloader.py:789\u001b[0m, in \u001b[0;36m_SingleProcessDataLoaderIter._next_data\u001b[0;34m(self)\u001b[0m\n\u001b[1;32m    787\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21m_next_data\u001b[39m(\u001b[38;5;28mself\u001b[39m):\n\u001b[1;32m    788\u001b[0m     index \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_next_index()  \u001b[38;5;66;03m# may raise StopIteration\u001b[39;00m\n\u001b[0;32m--> 789\u001b[0m     data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_dataset_fetcher\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mfetch\u001b[49m\u001b[43m(\u001b[49m\u001b[43mindex\u001b[49m\u001b[43m)\u001b[49m  \u001b[38;5;66;03m# may raise StopIteration\u001b[39;00m\n\u001b[1;32m    790\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_pin_memory:\n\u001b[1;32m    791\u001b[0m         data \u001b[38;5;241m=\u001b[39m _utils\u001b[38;5;241m.\u001b[39mpin_memory\u001b[38;5;241m.\u001b[39mpin_memory(data, \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_pin_memory_device)\n",
+-      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py:52\u001b[0m, in \u001b[0;36m_MapDatasetFetcher.fetch\u001b[0;34m(self, possibly_batched_index)\u001b[0m\n\u001b[1;32m     50\u001b[0m         data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mdataset\u001b[38;5;241m.\u001b[39m__getitems__(possibly_batched_index)\n\u001b[1;32m     51\u001b[0m     \u001b[38;5;28;01melse\u001b[39;00m:\n\u001b[0;32m---> 52\u001b[0m         data \u001b[38;5;241m=\u001b[39m [\u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mdataset[idx] \u001b[38;5;28;01mfor\u001b[39;00m idx \u001b[38;5;129;01min\u001b[39;00m possibly_batched_index]\n\u001b[1;32m     53\u001b[0m \u001b[38;5;28;01melse\u001b[39;00m:\n\u001b[1;32m     54\u001b[0m     data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mdataset[possibly_batched_index]\n",
+-      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py:52\u001b[0m, in \u001b[0;36m<listcomp>\u001b[0;34m(.0)\u001b[0m\n\u001b[1;32m     50\u001b[0m         data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mdataset\u001b[38;5;241m.\u001b[39m__getitems__(possibly_batched_index)\n\u001b[1;32m     51\u001b[0m     \u001b[38;5;28;01melse\u001b[39;00m:\n\u001b[0;32m---> 52\u001b[0m         data \u001b[38;5;241m=\u001b[39m [\u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mdataset\u001b[49m\u001b[43m[\u001b[49m\u001b[43midx\u001b[49m\u001b[43m]\u001b[49m \u001b[38;5;28;01mfor\u001b[39;00m idx \u001b[38;5;129;01min\u001b[39;00m possibly_batched_index]\n\u001b[1;32m     53\u001b[0m \u001b[38;5;28;01melse\u001b[39;00m:\n\u001b[1;32m     54\u001b[0m     data \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mdataset[possibly_batched_index]\n",
+-      "File \u001b[0;32m/project/aereditato/cestari/adni-mri-classification/pkg/data/datasets.py:94\u001b[0m, in \u001b[0;36mTransformDataset.__getitem__\u001b[0;34m(self, idx)\u001b[0m\n\u001b[1;32m     93\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21m__getitem__\u001b[39m(\u001b[38;5;28mself\u001b[39m, idx):\n\u001b[0;32m---> 94\u001b[0m     x, y \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mbase[idx]\n\u001b[1;32m     95\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mtransform \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n\u001b[1;32m     96\u001b[0m         x \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39mtransform(x)\n",
+-      "\u001b[0;31mTypeError\u001b[0m: cannot unpack non-iterable NoneType object"
+-     ]
+-    }
+-   ],
+-   "source": [
+-    "# Loop over folds\n",
+-    "for fold in range(dm.n_folds()):\n",
+-    "\n",
+-    "    # Set current fold\n",
+-    "    dm.set_fold(fold)\n",
+-    "\n",
+-    "    # Build model, optimizer, and criterion\n",
+-    "    model = instantiate(cfg[\"model\"])\n",
+-    "\n",
+-    "        # Create modalities from groups as described in the parameter\n",
+-    "    optim = build_optimizer(cfg[\"optimizer\"], model_params=model.parameters())\n",
+-    "    criterion = build_criterion(cfg[\"criterion\"], train_labels=dm.train_labels)\n",
+-    "\n",
+-    "    # Build and setup task\n",
+-    "    task = instantiate(cfg[\"task\"])\n",
+-    "    task.setup(model, optim, criterion)\n",
+-    "\n",
+-    "    # Callbacks \n",
+-    "    callbacks = instantiate(cfg[\"callbacks\"])\n",
+-    "\n",
+-    "    # Build trainer \n",
+-    "    trainer = Trainer(task, dm, callbacks, **cfg[\"trainer\"])\n",
+-    "\n",
+-    "    print(\"Ok\")\n",
+-    "    \n",
+-    "    # Fit model \n",
+-    "    trainer.fit()\n",
+-    "    \n",
+-    "    # Load best model \n",
+-    "    \n",
+-    "    # Test\n",
+-    "\n",
+-    "    \n",
+-    "\n",
+-    "    \n"
+-   ]
+-  },
+-  {
+-   "cell_type": "code",
+-   "execution_count": 8,
+-   "id": "b823514f",
++   "execution_count": 4,
++   "id": "3c90d4b9",
+    "metadata": {},
+    "outputs": [
+     {
+@@ -195,700 +91,229 @@
+        "        vertical-align: top;\n",
+        "    }\n",
+        "\n",
+-       "    .dataframe thead th {\n",
+-       "        text-align: right;\n",
++       "    .dataframe thead tr th {\n",
++       "        text-align: left;\n",
+        "    }\n",
+        "</style>\n",
+        "<table border=\"1\" class=\"dataframe\">\n",
+        "  <thead>\n",
+-       "    <tr style=\"text-align: right;\">\n",
+-       "      <th></th>\n",
+-       "      <th>PET</th>\n",
+-       "      <th>MRI</th>\n",
+-       "      <th>diagnosis</th>\n",
+-       "      <th>subject_id</th>\n",
+-       "      <th>strat_key</th>\n",
+-       "      <th>label</th>\n",
+-       "    </tr>\n",
+-       "  </thead>\n",
+-       "  <tbody>\n",
+-       "    <tr>\n",
+-       "      <th>0</th>\n",
+-       "      <td>1592036.0</td>\n",
+-       "      <td>238627.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.011</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>1</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>28560.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>2</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>28561.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>3</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>55275.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>4</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>55276.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>...</th>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20805</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>10283169.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>941_S_7074</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20806</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>11455284.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>941_S_7074</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20807</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1600180.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_7085</td>\n",
+-       "      <td>2.010</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20808</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1591321.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>941_S_7087</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20809</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1619403.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_7106</td>\n",
+-       "      <td>2.010</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "  </tbody>\n",
+-       "</table>\n",
+-       "<p>20810 rows × 6 columns</p>\n",
+-       "</div>"
+-      ],
+-      "text/plain": [
+-       "             PET         MRI  diagnosis  subject_id strat_key  label\n",
+-       "0      1592036.0    238627.0        1.0  002_S_0295     1.011      0\n",
+-       "1            NaN     28560.0        1.0  002_S_0295     1.010      0\n",
+-       "2            NaN     28561.0        1.0  002_S_0295     1.010      0\n",
+-       "3            NaN     55275.0        1.0  002_S_0295     1.010      0\n",
+-       "4            NaN     55276.0        1.0  002_S_0295     1.010      0\n",
+-       "...          ...         ...        ...         ...       ...    ...\n",
+-       "20805        NaN  10283169.0        1.0  941_S_7074     1.010      0\n",
+-       "20806        NaN  11455284.0        1.0  941_S_7074     1.010      0\n",
+-       "20807        NaN   1600180.0        2.0  941_S_7085     2.010      1\n",
+-       "20808        NaN   1591321.0        1.0  941_S_7087     1.010      0\n",
+-       "20809        NaN   1619403.0        2.0  941_S_7106     2.010      1\n",
+-       "\n",
+-       "[20810 rows x 6 columns]"
+-      ]
+-     },
+-     "execution_count": 8,
+-     "metadata": {},
+-     "output_type": "execute_result"
+-    }
+-   ],
+-   "source": [
+-    "df = dm.ds.df_multimodal\n",
+-    "df"
+-   ]
+-  },
+-  {
+-   "cell_type": "code",
+-   "execution_count": 12,
+-   "id": "9f847eec",
+-   "metadata": {},
+-   "outputs": [
+-    {
+-     "data": {
+-      "text/plain": [
+-       "array([1592036.,      nan, 1592893., ..., 1603365., 1614518., 1614530.],\n",
+-       "      shape=(2685,))"
+-      ]
+-     },
+-     "execution_count": 12,
+-     "metadata": {},
+-     "output_type": "execute_result"
+-    }
+-   ],
+-   "source": [
+-    "df[\"PET\"].unique()"
+-   ]
+-  },
+-  {
+-   "cell_type": "code",
+-   "execution_count": 13,
+-   "id": "e09b843c",
+-   "metadata": {},
+-   "outputs": [
+-    {
+-     "data": {
+-      "text/plain": [
+-       "array([ 238627.,   28560.,   28561., ..., 1600180., 1591321., 1619403.],\n",
+-       "      shape=(20394,))"
+-      ]
+-     },
+-     "execution_count": 13,
+-     "metadata": {},
+-     "output_type": "execute_result"
+-    }
+-   ],
+-   "source": [
+-    "df[\"MRI\"].unique()"
+-   ]
+-  },
+-  {
+-   "cell_type": "code",
+-   "execution_count": 17,
+-   "id": "287e50c6",
+-   "metadata": {},
+-   "outputs": [
+-    {
+-     "data": {
+-      "text/html": [
+-       "<div>\n",
+-       "<style scoped>\n",
+-       "    .dataframe tbody tr th:only-of-type {\n",
+-       "        vertical-align: middle;\n",
+-       "    }\n",
+-       "\n",
+-       "    .dataframe tbody tr th {\n",
+-       "        vertical-align: top;\n",
+-       "    }\n",
+-       "\n",
+-       "    .dataframe thead th {\n",
+-       "        text-align: right;\n",
+-       "    }\n",
+-       "</style>\n",
+-       "<table border=\"1\" class=\"dataframe\">\n",
+-       "  <thead>\n",
+-       "    <tr style=\"text-align: right;\">\n",
+        "      <th></th>\n",
+-       "      <th>PET</th>\n",
+-       "      <th>MRI</th>\n",
+-       "      <th>diagnosis</th>\n",
+-       "      <th>subject_id</th>\n",
+-       "      <th>strat_key</th>\n",
+-       "      <th>label</th>\n",
+-       "    </tr>\n",
+-       "  </thead>\n",
+-       "  <tbody>\n",
+-       "    <tr>\n",
+-       "      <th>1</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>28560.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>2</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>28561.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>3</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>55275.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>4</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>55276.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>5</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>114209.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>...</th>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20805</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>10283169.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>941_S_7074</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20806</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>11455284.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>941_S_7074</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20807</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1600180.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_7085</td>\n",
+-       "      <td>2.010</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20808</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1591321.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>941_S_7087</td>\n",
+-       "      <td>1.010</td>\n",
+-       "      <td>0</td>\n",
++       "      <th></th>\n",
++       "      <th>#</th>\n",
++       "      <th>%</th>\n",
++       "      <th colspan=\"3\" halign=\"left\">Stratification Keys Distribution</th>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>20809</th>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1619403.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_7106</td>\n",
+-       "      <td>2.010</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "  </tbody>\n",
+-       "</table>\n",
+-       "<p>18126 rows × 6 columns</p>\n",
+-       "</div>"
+-      ],
+-      "text/plain": [
+-       "       PET         MRI  diagnosis  subject_id strat_key  label\n",
+-       "1      NaN     28560.0        1.0  002_S_0295     1.010      0\n",
+-       "2      NaN     28561.0        1.0  002_S_0295     1.010      0\n",
+-       "3      NaN     55275.0        1.0  002_S_0295     1.010      0\n",
+-       "4      NaN     55276.0        1.0  002_S_0295     1.010      0\n",
+-       "5      NaN    114209.0        1.0  002_S_0295     1.010      0\n",
+-       "...    ...         ...        ...         ...       ...    ...\n",
+-       "20805  NaN  10283169.0        1.0  941_S_7074     1.010      0\n",
+-       "20806  NaN  11455284.0        1.0  941_S_7074     1.010      0\n",
+-       "20807  NaN   1600180.0        2.0  941_S_7085     2.010      1\n",
+-       "20808  NaN   1591321.0        1.0  941_S_7087     1.010      0\n",
+-       "20809  NaN   1619403.0        2.0  941_S_7106     2.010      1\n",
+-       "\n",
+-       "[18126 rows x 6 columns]"
+-      ]
+-     },
+-     "execution_count": 17,
+-     "metadata": {},
+-     "output_type": "execute_result"
+-    }
+-   ],
+-   "source": [
+-    "df[ (df[\"PET\"].isna()) & (df[\"MRI\"].notna())]"
+-   ]
+-  },
+-  {
+-   "cell_type": "code",
+-   "execution_count": 18,
+-   "id": "c53b3d03",
+-   "metadata": {},
+-   "outputs": [
+-    {
+-     "data": {
+-      "text/html": [
+-       "<div>\n",
+-       "<style scoped>\n",
+-       "    .dataframe tbody tr th:only-of-type {\n",
+-       "        vertical-align: middle;\n",
+-       "    }\n",
+-       "\n",
+-       "    .dataframe tbody tr th {\n",
+-       "        vertical-align: top;\n",
+-       "    }\n",
+-       "\n",
+-       "    .dataframe thead th {\n",
+-       "        text-align: right;\n",
+-       "    }\n",
+-       "</style>\n",
+-       "<table border=\"1\" class=\"dataframe\">\n",
+-       "  <thead>\n",
+-       "    <tr style=\"text-align: right;\">\n",
+        "      <th></th>\n",
+-       "      <th>PET</th>\n",
+-       "      <th>MRI</th>\n",
+-       "      <th>diagnosis</th>\n",
+-       "      <th>subject_id</th>\n",
+-       "      <th>strat_key</th>\n",
+-       "      <th>label</th>\n",
++       "      <th></th>\n",
++       "      <th></th>\n",
++       "      <th></th>\n",
++       "      <th>11</th>\n",
++       "      <th>31</th>\n",
++       "      <th>21</th>\n",
+        "    </tr>\n",
+        "  </thead>\n",
+        "  <tbody>\n",
+        "    <tr>\n",
+-       "      <th>0</th>\n",
+-       "      <td>1592036.0</td>\n",
+-       "      <td>238627.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0295</td>\n",
+-       "      <td>1.011</td>\n",
+-       "      <td>0</td>\n",
++       "      <th rowspan=\"2\" valign=\"top\">Fold 0</th>\n",
++       "      <th>Train</th>\n",
++       "      <td>4327</td>\n",
++       "      <td>0.805</td>\n",
++       "      <td>0.291</td>\n",
++       "      <td>0.288</td>\n",
++       "      <td>0.421</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>14</th>\n",
+-       "      <td>1592893.0</td>\n",
+-       "      <td>240808.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0413</td>\n",
+-       "      <td>1.011</td>\n",
+-       "      <td>0</td>\n",
++       "      <th>Val</th>\n",
++       "      <td>1050</td>\n",
++       "      <td>0.195</td>\n",
++       "      <td>0.299</td>\n",
++       "      <td>0.307</td>\n",
++       "      <td>0.394</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>15</th>\n",
+-       "      <td>1592896.0</td>\n",
+-       "      <td>371991.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0413</td>\n",
+-       "      <td>1.011</td>\n",
+-       "      <td>0</td>\n",
++       "      <th rowspan=\"2\" valign=\"top\">Fold 1</th>\n",
++       "      <th>Train</th>\n",
++       "      <td>4245</td>\n",
++       "      <td>0.789</td>\n",
++       "      <td>0.296</td>\n",
++       "      <td>0.285</td>\n",
++       "      <td>0.419</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>68</th>\n",
+-       "      <td>1592916.0</td>\n",
+-       "      <td>185090.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0685</td>\n",
+-       "      <td>1.011</td>\n",
+-       "      <td>0</td>\n",
++       "      <th>Val</th>\n",
++       "      <td>1132</td>\n",
++       "      <td>0.211</td>\n",
++       "      <td>0.278</td>\n",
++       "      <td>0.317</td>\n",
++       "      <td>0.405</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>69</th>\n",
+-       "      <td>1592917.0</td>\n",
+-       "      <td>322437.0</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>002_S_0685</td>\n",
+-       "      <td>1.011</td>\n",
+-       "      <td>0</td>\n",
++       "      <th rowspan=\"2\" valign=\"top\">Fold 2</th>\n",
++       "      <th>Train</th>\n",
++       "      <td>4249</td>\n",
++       "      <td>0.790</td>\n",
++       "      <td>0.293</td>\n",
++       "      <td>0.300</td>\n",
++       "      <td>0.407</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>...</th>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
++       "      <th>Val</th>\n",
++       "      <td>1128</td>\n",
++       "      <td>0.210</td>\n",
++       "      <td>0.289</td>\n",
++       "      <td>0.262</td>\n",
++       "      <td>0.449</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>20739</th>\n",
+-       "      <td>1603499.0</td>\n",
+-       "      <td>996464.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_6345</td>\n",
+-       "      <td>2.011</td>\n",
+-       "      <td>1</td>\n",
++       "      <th rowspan=\"2\" valign=\"top\">Fold 3</th>\n",
++       "      <th>Train</th>\n",
++       "      <td>4344</td>\n",
++       "      <td>0.808</td>\n",
++       "      <td>0.295</td>\n",
++       "      <td>0.294</td>\n",
++       "      <td>0.411</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>20787</th>\n",
+-       "      <td>1603401.0</td>\n",
+-       "      <td>1310783.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_6803</td>\n",
+-       "      <td>2.011</td>\n",
+-       "      <td>1</td>\n",
++       "      <th>Val</th>\n",
++       "      <td>1033</td>\n",
++       "      <td>0.192</td>\n",
++       "      <td>0.283</td>\n",
++       "      <td>0.282</td>\n",
++       "      <td>0.436</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>20788</th>\n",
+-       "      <td>1603365.0</td>\n",
+-       "      <td>1291638.0</td>\n",
+-       "      <td>3.0</td>\n",
+-       "      <td>941_S_6854</td>\n",
+-       "      <td>3.011</td>\n",
+-       "      <td>2</td>\n",
++       "      <th rowspan=\"2\" valign=\"top\">Fold 4</th>\n",
++       "      <th>Train</th>\n",
++       "      <td>4343</td>\n",
++       "      <td>0.808</td>\n",
++       "      <td>0.287</td>\n",
++       "      <td>0.292</td>\n",
++       "      <td>0.421</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>20791</th>\n",
+-       "      <td>1614518.0</td>\n",
+-       "      <td>1467526.0</td>\n",
+-       "      <td>3.0</td>\n",
+-       "      <td>941_S_6962</td>\n",
+-       "      <td>3.011</td>\n",
+-       "      <td>2</td>\n",
++       "      <th>Val</th>\n",
++       "      <td>1034</td>\n",
++       "      <td>0.192</td>\n",
++       "      <td>0.314</td>\n",
++       "      <td>0.291</td>\n",
++       "      <td>0.395</td>\n",
+        "    </tr>\n",
+        "    <tr>\n",
+-       "      <th>20797</th>\n",
+-       "      <td>1614530.0</td>\n",
+-       "      <td>1544467.0</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>941_S_7041</td>\n",
+-       "      <td>2.011</td>\n",
+-       "      <td>1</td>\n",
++       "      <th>Test</th>\n",
++       "      <th></th>\n",
++       "      <td>586</td>\n",
++       "      <td>NaN</td>\n",
++       "      <td>0.381</td>\n",
++       "      <td>0.271</td>\n",
++       "      <td>0.348</td>\n",
+        "    </tr>\n",
+        "  </tbody>\n",
+        "</table>\n",
+-       "<p>2267 rows × 6 columns</p>\n",
+        "</div>"
+       ],
+       "text/plain": [
+-       "             PET        MRI  diagnosis  subject_id strat_key  label\n",
+-       "0      1592036.0   238627.0        1.0  002_S_0295     1.011      0\n",
+-       "14     1592893.0   240808.0        1.0  002_S_0413     1.011      0\n",
+-       "15     1592896.0   371991.0        1.0  002_S_0413     1.011      0\n",
+-       "68     1592916.0   185090.0        1.0  002_S_0685     1.011      0\n",
+-       "69     1592917.0   322437.0        1.0  002_S_0685     1.011      0\n",
+-       "...          ...        ...        ...         ...       ...    ...\n",
+-       "20739  1603499.0   996464.0        2.0  941_S_6345     2.011      1\n",
+-       "20787  1603401.0  1310783.0        2.0  941_S_6803     2.011      1\n",
+-       "20788  1603365.0  1291638.0        3.0  941_S_6854     3.011      2\n",
+-       "20791  1614518.0  1467526.0        3.0  941_S_6962     3.011      2\n",
+-       "20797  1614530.0  1544467.0        2.0  941_S_7041     2.011      1\n",
+-       "\n",
+-       "[2267 rows x 6 columns]"
++       "                 #      % Stratification Keys Distribution              \n",
++       "                                                        11     31     21\n",
++       "Fold 0 Train  4327  0.805                            0.291  0.288  0.421\n",
++       "       Val    1050  0.195                            0.299  0.307  0.394\n",
++       "Fold 1 Train  4245  0.789                            0.296  0.285  0.419\n",
++       "       Val    1132  0.211                            0.278  0.317  0.405\n",
++       "Fold 2 Train  4249  0.790                            0.293  0.300  0.407\n",
++       "       Val    1128  0.210                            0.289  0.262  0.449\n",
++       "Fold 3 Train  4344  0.808                            0.295  0.294  0.411\n",
++       "       Val    1033  0.192                            0.283  0.282  0.436\n",
++       "Fold 4 Train  4343  0.808                            0.287  0.292  0.421\n",
++       "       Val    1034  0.192                            0.314  0.291  0.395\n",
++       "Test           586    NaN                            0.381  0.271  0.348"
+       ]
+      },
+-     "execution_count": 18,
++     "execution_count": 4,
+      "metadata": {},
+      "output_type": "execute_result"
+     }
+    ],
+    "source": [
+-    "df[ (df[\"PET\"].notna()) & (df[\"MRI\"].notna())]"
++    "df = dm.info()\n",
++    "df"
+    ]
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 19,
+-   "id": "812b5f0a",
++   "execution_count": 5,
++   "id": "9bbe5a79",
+    "metadata": {},
+    "outputs": [
+     {
+-     "data": {
+-      "text/html": [
+-       "<div>\n",
+-       "<style scoped>\n",
+-       "    .dataframe tbody tr th:only-of-type {\n",
+-       "        vertical-align: middle;\n",
+-       "    }\n",
+-       "\n",
+-       "    .dataframe tbody tr th {\n",
+-       "        vertical-align: top;\n",
+-       "    }\n",
+-       "\n",
+-       "    .dataframe thead th {\n",
+-       "        text-align: right;\n",
+-       "    }\n",
+-       "</style>\n",
+-       "<table border=\"1\" class=\"dataframe\">\n",
+-       "  <thead>\n",
+-       "    <tr style=\"text-align: right;\">\n",
+-       "      <th></th>\n",
+-       "      <th>PET</th>\n",
+-       "      <th>MRI</th>\n",
+-       "      <th>diagnosis</th>\n",
+-       "      <th>subject_id</th>\n",
+-       "      <th>strat_key</th>\n",
+-       "      <th>label</th>\n",
+-       "    </tr>\n",
+-       "  </thead>\n",
+-       "  <tbody>\n",
+-       "    <tr>\n",
+-       "      <th>179</th>\n",
+-       "      <td>1593116.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>002_S_1155</td>\n",
+-       "      <td>2.001</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>249</th>\n",
+-       "      <td>1592965.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>3.0</td>\n",
+-       "      <td>002_S_1268</td>\n",
+-       "      <td>3.001</td>\n",
+-       "      <td>2</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>322</th>\n",
+-       "      <td>1593121.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>3.0</td>\n",
+-       "      <td>002_S_4171</td>\n",
+-       "      <td>3.001</td>\n",
+-       "      <td>2</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>555</th>\n",
+-       "      <td>1593457.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>003_S_0907</td>\n",
+-       "      <td>1.001</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>556</th>\n",
+-       "      <td>1593462.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>1.0</td>\n",
+-       "      <td>003_S_0907</td>\n",
+-       "      <td>1.001</td>\n",
+-       "      <td>0</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>...</th>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "      <td>...</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>19568</th>\n",
+-       "      <td>1602441.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>137_S_4862</td>\n",
+-       "      <td>2.001</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>19918</th>\n",
+-       "      <td>1602572.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>141_S_6779</td>\n",
+-       "      <td>2.001</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20065</th>\n",
+-       "      <td>1602816.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>153_S_6633</td>\n",
+-       "      <td>2.001</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20069</th>\n",
+-       "      <td>1602868.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>3.0</td>\n",
+-       "      <td>153_S_6694</td>\n",
+-       "      <td>3.001</td>\n",
+-       "      <td>2</td>\n",
+-       "    </tr>\n",
+-       "    <tr>\n",
+-       "      <th>20161</th>\n",
+-       "      <td>1603075.0</td>\n",
+-       "      <td>NaN</td>\n",
+-       "      <td>2.0</td>\n",
+-       "      <td>168_S_6591</td>\n",
+-       "      <td>2.001</td>\n",
+-       "      <td>1</td>\n",
+-       "    </tr>\n",
+-       "  </tbody>\n",
+-       "</table>\n",
+-       "<p>417 rows × 6 columns</p>\n",
+-       "</div>"
+-      ],
+-      "text/plain": [
+-       "             PET  MRI  diagnosis  subject_id strat_key  label\n",
+-       "179    1593116.0  NaN        2.0  002_S_1155     2.001      1\n",
+-       "249    1592965.0  NaN        3.0  002_S_1268     3.001      2\n",
+-       "322    1593121.0  NaN        3.0  002_S_4171     3.001      2\n",
+-       "555    1593457.0  NaN        1.0  003_S_0907     1.001      0\n",
+-       "556    1593462.0  NaN        1.0  003_S_0907     1.001      0\n",
+-       "...          ...  ...        ...         ...       ...    ...\n",
+-       "19568  1602441.0  NaN        2.0  137_S_4862     2.001      1\n",
+-       "19918  1602572.0  NaN        2.0  141_S_6779     2.001      1\n",
+-       "20065  1602816.0  NaN        2.0  153_S_6633     2.001      1\n",
+-       "20069  1602868.0  NaN        3.0  153_S_6694     3.001      2\n",
+-       "20161  1603075.0  NaN        2.0  168_S_6591     2.001      1\n",
+-       "\n",
+-       "[417 rows x 6 columns]"
+-      ]
+-     },
+-     "execution_count": 19,
+-     "metadata": {},
+-     "output_type": "execute_result"
++     "ename": "KeyboardInterrupt",
++     "evalue": "",
++     "output_type": "error",
++     "traceback": [
++      "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
++      "\u001b[0;31mKeyboardInterrupt\u001b[0m                         Traceback (most recent call last)",
++      "Cell \u001b[0;32mIn[5], line 11\u001b[0m\n\u001b[1;32m      8\u001b[0m model \u001b[38;5;241m=\u001b[39m instantiate(cfg[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mmodel\u001b[39m\u001b[38;5;124m\"\u001b[39m])\n\u001b[1;32m     10\u001b[0m \u001b[38;5;66;03m# Create modalities from groups as described in the parameter\u001b[39;00m\n\u001b[0;32m---> 11\u001b[0m optim \u001b[38;5;241m=\u001b[39m \u001b[43mbuild_optimizer\u001b[49m\u001b[43m(\u001b[49m\u001b[43mcfg\u001b[49m\u001b[43m[\u001b[49m\u001b[38;5;124;43m\"\u001b[39;49m\u001b[38;5;124;43moptimizer\u001b[39;49m\u001b[38;5;124;43m\"\u001b[39;49m\u001b[43m]\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43mmodel_params\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mmodel\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mparameters\u001b[49m\u001b[43m(\u001b[49m\u001b[43m)\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m     12\u001b[0m criterion \u001b[38;5;241m=\u001b[39m build_criterion(cfg[\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mcriterion\u001b[39m\u001b[38;5;124m\"\u001b[39m], train_labels\u001b[38;5;241m=\u001b[39mdm\u001b[38;5;241m.\u001b[39mtrain_labels)\n\u001b[1;32m     14\u001b[0m \u001b[38;5;66;03m# Build and setup task\u001b[39;00m\n",
++      "File \u001b[0;32m/project/aereditato/cestari/adni-mri-classification/pkg/training/optimizer.py:18\u001b[0m, in \u001b[0;36mbuild_optimizer\u001b[0;34m(cfg, model_params)\u001b[0m\n\u001b[1;32m     15\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m name \u001b[38;5;129;01min\u001b[39;00m _OPTIMIZER_REGISTRY:\n\u001b[1;32m     16\u001b[0m     \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mKeyError\u001b[39;00m(\u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mUnknown optimizer \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mname\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m. Options: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00m\u001b[38;5;28mlist\u001b[39m(_OPTIMIZER_REGISTRY)\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m)\n\u001b[0;32m---> 18\u001b[0m \u001b[38;5;28;01mreturn\u001b[39;00m \u001b[43m_OPTIMIZER_REGISTRY\u001b[49m\u001b[43m[\u001b[49m\u001b[43mname\u001b[49m\u001b[43m]\u001b[49m\u001b[43m(\u001b[49m\u001b[43mparams\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mmodel_params\u001b[49m\u001b[43m,\u001b[49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[38;5;241;43m*\u001b[39;49m\u001b[43mcfg\u001b[49m\u001b[43m[\u001b[49m\u001b[38;5;124;43m\"\u001b[39;49m\u001b[38;5;124;43mparams\u001b[39;49m\u001b[38;5;124;43m\"\u001b[39;49m\u001b[43m]\u001b[49m\u001b[43m)\u001b[49m\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/optim/adamw.py:37\u001b[0m, in \u001b[0;36mAdamW.__init__\u001b[0;34m(self, params, lr, betas, eps, weight_decay, amsgrad, maximize, foreach, capturable, differentiable, fused)\u001b[0m\n\u001b[1;32m     22\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21m__init__\u001b[39m(\n\u001b[1;32m     23\u001b[0m     \u001b[38;5;28mself\u001b[39m,\n\u001b[1;32m     24\u001b[0m     params: ParamsT,\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m     35\u001b[0m     fused: Optional[\u001b[38;5;28mbool\u001b[39m] \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mNone\u001b[39;00m,\n\u001b[1;32m     36\u001b[0m ):\n\u001b[0;32m---> 37\u001b[0m     \u001b[38;5;28;43msuper\u001b[39;49m\u001b[43m(\u001b[49m\u001b[43m)\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[38;5;21;43m__init__\u001b[39;49m\u001b[43m(\u001b[49m\n\u001b[1;32m     38\u001b[0m \u001b[43m        \u001b[49m\u001b[43mparams\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     39\u001b[0m \u001b[43m        \u001b[49m\u001b[43mlr\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     40\u001b[0m \u001b[43m        \u001b[49m\u001b[43mbetas\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     41\u001b[0m \u001b[43m        \u001b[49m\u001b[43meps\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     42\u001b[0m \u001b[43m        \u001b[49m\u001b[43mweight_decay\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     43\u001b[0m \u001b[43m        \u001b[49m\u001b[43mamsgrad\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     44\u001b[0m \u001b[43m        \u001b[49m\u001b[43mforeach\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mforeach\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     45\u001b[0m \u001b[43m        \u001b[49m\u001b[43mmaximize\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mmaximize\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     46\u001b[0m \u001b[43m        \u001b[49m\u001b[43mcapturable\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mcapturable\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     47\u001b[0m \u001b[43m        \u001b[49m\u001b[43mdifferentiable\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mdifferentiable\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     48\u001b[0m \u001b[43m        \u001b[49m\u001b[43mfused\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[43mfused\u001b[49m\u001b[43m,\u001b[49m\n\u001b[1;32m     49\u001b[0m \u001b[43m        \u001b[49m\u001b[43mdecoupled_weight_decay\u001b[49m\u001b[38;5;241;43m=\u001b[39;49m\u001b[38;5;28;43;01mTrue\u001b[39;49;00m\u001b[43m,\u001b[49m\n\u001b[1;32m     50\u001b[0m \u001b[43m    \u001b[49m\u001b[43m)\u001b[49m\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/optim/adam.py:100\u001b[0m, in \u001b[0;36mAdam.__init__\u001b[0;34m(self, params, lr, betas, eps, weight_decay, amsgrad, foreach, maximize, capturable, differentiable, fused, decoupled_weight_decay)\u001b[0m\n\u001b[1;32m     85\u001b[0m         \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mValueError\u001b[39;00m(\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mTensor betas[1] must be 1-element\u001b[39m\u001b[38;5;124m\"\u001b[39m)\n\u001b[1;32m     87\u001b[0m defaults \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mdict\u001b[39m(\n\u001b[1;32m     88\u001b[0m     lr\u001b[38;5;241m=\u001b[39mlr,\n\u001b[1;32m     89\u001b[0m     betas\u001b[38;5;241m=\u001b[39mbetas,\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m     98\u001b[0m     decoupled_weight_decay\u001b[38;5;241m=\u001b[39mdecoupled_weight_decay,\n\u001b[1;32m     99\u001b[0m )\n\u001b[0;32m--> 100\u001b[0m \u001b[38;5;28;43msuper\u001b[39;49m\u001b[43m(\u001b[49m\u001b[43m)\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[38;5;21;43m__init__\u001b[39;49m\u001b[43m(\u001b[49m\u001b[43mparams\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43mdefaults\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m    102\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m fused:\n\u001b[1;32m    103\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m differentiable:\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/optim/optimizer.py:369\u001b[0m, in \u001b[0;36mOptimizer.__init__\u001b[0;34m(self, params, defaults)\u001b[0m\n\u001b[1;32m    366\u001b[0m     param_groups \u001b[38;5;241m=\u001b[39m [{\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mparams\u001b[39m\u001b[38;5;124m\"\u001b[39m: param_groups}]\n\u001b[1;32m    368\u001b[0m \u001b[38;5;28;01mfor\u001b[39;00m param_group \u001b[38;5;129;01min\u001b[39;00m param_groups:\n\u001b[0;32m--> 369\u001b[0m     \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43madd_param_group\u001b[49m\u001b[43m(\u001b[49m\u001b[43mcast\u001b[49m\u001b[43m(\u001b[49m\u001b[38;5;28;43mdict\u001b[39;49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43mparam_group\u001b[49m\u001b[43m)\u001b[49m\u001b[43m)\u001b[49m\n\u001b[1;32m    371\u001b[0m \u001b[38;5;66;03m# Allows _cuda_graph_capture_health_check to rig a poor man's TORCH_WARN_ONCE in python,\u001b[39;00m\n\u001b[1;32m    372\u001b[0m \u001b[38;5;66;03m# which I don't think exists\u001b[39;00m\n\u001b[1;32m    373\u001b[0m \u001b[38;5;66;03m# https://github.com/pytorch/pytorch/issues/72948\u001b[39;00m\n\u001b[1;32m    374\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_warned_capturable_if_run_uncaptured \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mTrue\u001b[39;00m\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/_compile.py:46\u001b[0m, in \u001b[0;36m_disable_dynamo.<locals>.inner\u001b[0;34m(*args, **kwargs)\u001b[0m\n\u001b[1;32m     44\u001b[0m disable_fn \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mgetattr\u001b[39m(fn, \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m__dynamo_disable\u001b[39m\u001b[38;5;124m\"\u001b[39m, \u001b[38;5;28;01mNone\u001b[39;00m)\n\u001b[1;32m     45\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m disable_fn \u001b[38;5;129;01mis\u001b[39;00m \u001b[38;5;28;01mNone\u001b[39;00m:\n\u001b[0;32m---> 46\u001b[0m     \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_dynamo\u001b[39;00m\n\u001b[1;32m     48\u001b[0m     disable_fn \u001b[38;5;241m=\u001b[39m torch\u001b[38;5;241m.\u001b[39m_dynamo\u001b[38;5;241m.\u001b[39mdisable(fn, recursive)\n\u001b[1;32m     49\u001b[0m     fn\u001b[38;5;241m.\u001b[39m__dynamo_disable \u001b[38;5;241m=\u001b[39m disable_fn  \u001b[38;5;66;03m# type: ignore[attr-defined]\u001b[39;00m\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/_dynamo/__init__.py:13\u001b[0m\n\u001b[1;32m      1\u001b[0m \u001b[38;5;124;03m\"\"\"\u001b[39;00m\n\u001b[1;32m      2\u001b[0m \u001b[38;5;124;03mTorchDynamo is a Python-level JIT compiler designed to make unmodified PyTorch programs faster.\u001b[39;00m\n\u001b[1;32m      3\u001b[0m \u001b[38;5;124;03mTorchDynamo hooks into the frame evaluation API in CPython (PEP 523) to dynamically modify Python\u001b[39;00m\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m      8\u001b[0m \u001b[38;5;124;03mseamlessly optimize PyTorch programs, including those using modern Python features.\u001b[39;00m\n\u001b[1;32m      9\u001b[0m \u001b[38;5;124;03m\"\"\"\u001b[39;00m\n\u001b[1;32m     11\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\n\u001b[0;32m---> 13\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m config, convert_frame, eval_frame, resume_execution\n\u001b[1;32m     14\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mbackends\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mregistry\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m list_backends, lookup_backend, register_backend\n\u001b[1;32m     15\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mcallback\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m callback_handler, on_compile_end, on_compile_start\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/_dynamo/convert_frame.py:52\u001b[0m\n\u001b[1;32m     50\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_C\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_dynamo\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mguards\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m GlobalStateGuard\n\u001b[1;32m     51\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_dynamo\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mdistributed\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m get_compile_pg\n\u001b[0;32m---> 52\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_dynamo\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01msymbolic_convert\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m TensorifyState\n\u001b[1;32m     53\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_guards\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m compile_context, CompileContext, CompileId, tracing\n\u001b[1;32m     54\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_logging\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m structured\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/_dynamo/symbolic_convert.py:52\u001b[0m\n\u001b[1;32m     50\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\n\u001b[1;32m     51\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_logging\u001b[39;00m\n\u001b[0;32m---> 52\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_dynamo\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mexc\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m TensorifyScalarRestartAnalysis\n\u001b[1;32m     53\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_guards\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m tracing, TracingContext\n\u001b[1;32m     54\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mfx\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mexperimental\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01msymbolic_shapes\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m guard_bool\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/_dynamo/exc.py:41\u001b[0m\n\u001b[1;32m     38\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_guards\u001b[39;00m\n\u001b[1;32m     40\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m config\n\u001b[0;32m---> 41\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m counters\n\u001b[1;32m     44\u001b[0m \u001b[38;5;28;01mif\u001b[39;00m TYPE_CHECKING:\n\u001b[1;32m     45\u001b[0m     \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtypes\u001b[39;00m\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/_dynamo/utils.py:69\u001b[0m\n\u001b[1;32m     67\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\n\u001b[1;32m     68\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_functorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mconfig\u001b[39;00m\n\u001b[0;32m---> 69\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mfx\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mexperimental\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01msymbolic_shapes\u001b[39;00m\n\u001b[1;32m     70\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_pytree\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mas\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mpytree\u001b[39;00m\n\u001b[1;32m     71\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m fx\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/fx/experimental/symbolic_shapes.py:67\u001b[0m\n\u001b[1;32m     65\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_ordered_set\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m OrderedSet\n\u001b[1;32m     66\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_python_dispatch\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m is_traceable_wrapper_subclass\n\u001b[0;32m---> 67\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_sympy\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mfunctions\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m (\n\u001b[1;32m     68\u001b[0m     Application,\n\u001b[1;32m     69\u001b[0m     CeilToInt,\n\u001b[1;32m     70\u001b[0m     CleanDiv,\n\u001b[1;32m     71\u001b[0m     FloorDiv,\n\u001b[1;32m     72\u001b[0m     FloorToInt,\n\u001b[1;32m     73\u001b[0m     IsNonOverlappingAndDenseIndicator,\n\u001b[1;32m     74\u001b[0m     Max,\n\u001b[1;32m     75\u001b[0m     Mod,\n\u001b[1;32m     76\u001b[0m     PythonMod,\n\u001b[1;32m     77\u001b[0m )\n\u001b[1;32m     78\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_sympy\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mnumbers\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m int_oo\n\u001b[1;32m     79\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtorch\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mutils\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01m_sympy\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mprinters\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m CppPrinter, PythonPrinter\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/torch/utils/_sympy/functions.py:9\u001b[0m\n\u001b[1;32m      6\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtyping\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m Callable, Optional, SupportsFloat, TYPE_CHECKING, TypeVar, Union\n\u001b[1;32m      7\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01mtyping_extensions\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m TypeVarTuple, Unpack\n\u001b[0;32m----> 9\u001b[0m \u001b[38;5;28;01mimport\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01msympy\u001b[39;00m\n\u001b[1;32m     10\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01msympy\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m S\n\u001b[1;32m     11\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01msympy\u001b[39;00m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mcore\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m sympify\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/sympy/__init__.py:111\u001b[0m\n\u001b[1;32m     74\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01massumptions\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m (AppliedPredicate, Predicate, AssumptionsContext,\n\u001b[1;32m     75\u001b[0m         assuming, Q, ask, register_handler, remove_handler, refine)\n\u001b[1;32m     77\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mpolys\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m (Poly, PurePoly, poly_from_expr, parallel_poly_from_expr,\n\u001b[1;32m     78\u001b[0m         degree, total_degree, degree_list, LC, LM, LT, pdiv, prem, pquo,\n\u001b[1;32m     79\u001b[0m         pexquo, div, rem, quo, exquo, half_gcdex, gcdex, invert,\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m    108\u001b[0m         legendre_poly, laguerre_poly, apart, apart_list, assemble_partfrac_list,\n\u001b[1;32m    109\u001b[0m         Options, ring, xring, vring, sring, field, xfield, vfield, sfield)\n\u001b[0;32m--> 111\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mseries\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m (Order, O, limit, Limit, gruntz, series, approximants,\n\u001b[1;32m    112\u001b[0m         residue, EmptySequence, SeqPer, SeqFormula, sequence, SeqAdd, SeqMul,\n\u001b[1;32m    113\u001b[0m         fourier_series, fps, difference_delta, limit_seq)\n\u001b[1;32m    115\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mfunctions\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m (factorial, factorial2, rf, ff, binomial,\n\u001b[1;32m    116\u001b[0m         RisingFactorial, FallingFactorial, subfactorial, carmichael,\n\u001b[1;32m    117\u001b[0m         fibonacci, lucas, motzkin, tribonacci, harmonic, bernoulli, bell, euler,\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m    138\u001b[0m         Znm, elliptic_k, elliptic_f, elliptic_e, elliptic_pi, beta, mathieus,\n\u001b[1;32m    139\u001b[0m         mathieuc, mathieusprime, mathieucprime, riemann_xi, betainc, betainc_regularized)\n\u001b[1;32m    141\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mntheory\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m (nextprime, prevprime, prime, primerange,\n\u001b[1;32m    142\u001b[0m         randprime, Sieve, sieve, primorial, cycle_length, composite,\n\u001b[1;32m    143\u001b[0m         compositepi, isprime, divisors, proper_divisors, factorint,\n\u001b[0;32m   (...)\u001b[0m\n\u001b[1;32m    154\u001b[0m         continued_fraction_iterator, continued_fraction_reduce,\n\u001b[1;32m    155\u001b[0m         continued_fraction_convergents, continued_fraction, egyptian_fraction)\n",
++      "File \u001b[0;32m~/.conda/envs/adni_rcc/lib/python3.10/site-packages/sympy/series/__init__.py:10\u001b[0m\n\u001b[1;32m      8\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mresidues\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m residue\n\u001b[1;32m      9\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01msequences\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m SeqPer, SeqFormula, sequence, SeqAdd, SeqMul\n\u001b[0;32m---> 10\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mfourier\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m fourier_series\n\u001b[1;32m     11\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mformal\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m fps\n\u001b[1;32m     12\u001b[0m \u001b[38;5;28;01mfrom\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;21;01m.\u001b[39;00m\u001b[38;5;21;01mlimitseq\u001b[39;00m\u001b[38;5;250m \u001b[39m\u001b[38;5;28;01mimport\u001b[39;00m difference_delta, limit_seq\n",
++      "File \u001b[0;32m<frozen importlib._bootstrap>:1027\u001b[0m, in \u001b[0;36m_find_and_load\u001b[0;34m(name, import_)\u001b[0m\n",
++      "File \u001b[0;32m<frozen importlib._bootstrap>:1006\u001b[0m, in \u001b[0;36m_find_and_load_unlocked\u001b[0;34m(name, import_)\u001b[0m\n",
++      "File \u001b[0;32m<frozen importlib._bootstrap>:688\u001b[0m, in \u001b[0;36m_load_unlocked\u001b[0;34m(spec)\u001b[0m\n",
++      "File \u001b[0;32m<frozen importlib._bootstrap_external>:879\u001b[0m, in \u001b[0;36mexec_module\u001b[0;34m(self, module)\u001b[0m\n",
++      "File \u001b[0;32m<frozen importlib._bootstrap_external>:975\u001b[0m, in \u001b[0;36mget_code\u001b[0;34m(self, fullname)\u001b[0m\n",
++      "File \u001b[0;32m<frozen importlib._bootstrap_external>:1074\u001b[0m, in \u001b[0;36mget_data\u001b[0;34m(self, path)\u001b[0m\n",
++      "\u001b[0;31mKeyboardInterrupt\u001b[0m: "
++     ]
+     }
+    ],
+    "source": [
+-    "df[ (df[\"PET\"].notna()) & (df[\"MRI\"].isna())]"
++    "# Loop over folds\n",
++    "for fold in range(dm.n_folds()):\n",
++    "\n",
++    "    # Set current fold\n",
++    "    dm.set_fold(fold)\n",
++    "\n",
++    "    # Build model, optimizer, and criterion\n",
++    "    model = instantiate(cfg[\"model\"])\n",
++    "\n",
++    "    # Create modalities from groups as described in the parameter\n",
++    "    optim = build_optimizer(cfg[\"optimizer\"], model_params=model.parameters())\n",
++    "    criterion = build_criterion(cfg[\"criterion\"], train_labels=dm.train_labels)\n",
++    "\n",
++    "    # Build and setup task\n",
++    "    task = instantiate(cfg[\"task\"])\n",
++    "    task.setup(model=model, criterion=criterion, optimizer=optim)\n",
++    "\n",
++    "    # Callbacks \n",
++    "    callbacks = instantiate(cfg[\"callbacks\"])\n",
++    "\n",
++    "    # Build trainer \n",
++    "    trainer = Trainer(task, dm, callbacks, dir=\"./test_experiment\", **cfg[\"trainer\"])\n",
++    "    \n",
++    "    # Fit model \n",
++    "    trainer.fit()\n",
++    "    \n",
++    "    # Load best model \n",
++    "    \n",
++    "    # Test\n",
++    "    break"
+    ]
+   },
+   {
+    "cell_type": "code",
+    "execution_count": null,
+-   "id": "b1b9ddca",
++   "id": "f13844d4",
+    "metadata": {},
+    "outputs": [],
+    "source": []
+diff --git a/test.yaml b/test.yaml
+deleted file mode 100644
+index f2c9a4d..0000000
+--- a/test.yaml
++++ /dev/null
+@@ -1,83 +0,0 @@
+-datamodule:
+-  class: pkg.data.datamodules.ADNIDataModule
+-  args:
+-    data:
+-      data_dir: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/data/
+-      scan_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/dataset_multimodal.csv
+-      diagnostic_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/DXSUM_02Feb2026.csv
+-      diagnosis: [1,2,3]
+-      tolerance: 180
+-      modalities:
+-        MRI: ["MRI-T1-3T", "MRI-T1-1.5T"]
+-        PET: ["PET-FDG"]
+-    split:
+-      mode: kfold
+-      seed: 42
+-      folds: 5
+-      test_size: 0.1
+-      val_size: 0.2
+-    loader:
+-      batch_size: 4
+-      weighted_sampling: true
+-    transform:
+-      - random_flip:
+-          p: 0.5
+-      - random_affine:
+-          p: 0.5
+-          degrees: 5
+-          translation: 5
+-      - random_noise:
+-          p: 0.2
+-          std: 0.02
+-
+-model:
+-  class: pkg.models.model_resnet18.ResNet18
+-  args:
+-    cfg:
+-      init_filters: 8
+-      dropout: 0.3
+-      num_classes: 3
+-
+-optimizer:
+-  name: AdamW
+-  params:
+-    lr: 0.0001
+-    weight_decay: 0.01
+-
+-criterion:
+-  name: CrossEntropyLoss
+-  weights: auto
+-  params: {}
+-        
+-task:
+-  class: pkg.tasks.dummytask.DummyTask
+-  args: {}
+-    
+-trainer:
+-  max_epochs: 10
+-
+-callbacks:
+-  - class: pkg.callbacks.metrics.Metrics
+-    args: {}
+-
+-  - class: pkg.callbacks.checkpoint.CheckpointManager
+-    args: 
+-      monitor: val/loss
+-      mode: min 
+-      patience: 10
+-
+-  - class: pkg.callbacks.scheduler.SchedulerPolicy
+-    args: 
+-      name: ReduceLROnPlateau
+-      params: {}
+-
+-
+-
+-
+-
+- 
+-
+-
+-
+-  
+-        
+\ No newline at end of file
+diff --git a/train.py b/train.py
+index e43b4f1..985ce51 100644
+--- a/train.py
++++ b/train.py
+@@ -1,25 +1,103 @@
++
++import os
+ import yaml
++import argparse
++import subprocess
++import shutil
++
++from pkg.training.optimizer import build_optimizer
++from pkg.training.criterion import build_criterion
++from pkg.utils.instantiate import instantiate
++from pkg.training.trainer import Trainer
++
++def save_reproducibility_info(config_file, exp_dir):
++
++    os.makedirs(exp_dir, exist_ok=True)
++
++    # Save copy of configuration file 
++    shutil.copy(config_file, os.path.join(exp_dir, "config.yaml"))
++
++    # Save commit hash
++    commit = subprocess.run(
++        ["git", "rev-parse", "HEAD"],
++        capture_output=True,
++        text=True,
++        check=True,
++    )
++
++    with open(os.path.join(exp_dir, "commit.txt"), "w") as f:
++        f.write(commit.stdout)
++
++    # Save git diff patch
++    with open(os.path.join(exp_dir, "patch.diff"), "w") as f:
++        subprocess.run(
++            ["git", "diff", "HEAD"],
++            stdout=f,
++            check=True,
++        )
++
++    # Save python requirements
++    with open(os.path.join(exp_dir, "requirements.txt"), "w") as f:
++        subprocess.run(
++            ["pip", "freeze"],
++            stdout=f,
++            check=True,
++        )
++
+ 
+-from adni_mri_classification.data.datasets import ADNIDataset
++def main(config_file, exp_dir):
+ 
+-def main(path="./test.yaml"):
++    # Create experiment dir
++    os.makedirs(exp_dir, exist_ok=True)
++
++    # Dump reproducibility info
++    save_reproducibility_info(config_file, exp_dir)
+ 
+     # Read configuration file
+-    with open(path, 'r') as f:
++    with open(config_file, 'r') as f:
+         cfg = yaml.safe_load(f)
+ 
+-    # Print configuration
+-    print(cfg)
++    # Data module 
++    dm = instantiate(cfg["datamodule"])
++
++    # Setup 
++    dm.setup()
++
++    # Log datamodule info
++    print(dm.info())
++
++    # Loop over folds
++    for fold in range(dm.n_folds()):
++
++        # Create fold dir 
++        fold_dir = os.path.join(exp_dir, f"fold_{fold}")
++        os.makedirs(fold_dir)
+ 
+-    # Load dataset
+-    dataset = ADNIDataset(**cfg["data"])
++        # Set current fold
++        dm.set_fold(fold)
+ 
+-    # Perform dataset splitting
+-    
++        # Build model, optimizer, and criterion
++        model = instantiate(cfg["model"])
+ 
+-    pass
+-    
++        # Create modalities from groups as described in the parameter
++        optim = build_optimizer(cfg["optimizer"], model_params=model.parameters())
++        criterion = build_criterion(cfg["criterion"], train_labels=dm.train_labels)
++
++        # Set criterion on model
++        model.set_criterion(criterion)
++
++        # Callbacks 
++        callbacks = instantiate(cfg["callbacks"])
++
++        # Build trainer 
++        trainer = Trainer(model, optim, dm, callbacks, dir=fold_dir, **cfg["trainer"])
++        
++        # Fit model 
++        trainer.fit()
++        
++        # Test it
++        trainer.test()
+ 
+ if __name__ == "__main__":
+-    
+-    main()
+\ No newline at end of file
++
++    main("./config.yaml","./test_exp")
+\ No newline at end of file

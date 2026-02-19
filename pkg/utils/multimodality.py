@@ -149,7 +149,7 @@ def create_multimodal_dataframe(df_scans, tolerance=180, passes=2):
         # All modalities
         modalities = sorted(df_scans["modality"].unique())
 
-        for group, indices in tqdm(df_scans.groupby(["subject_id", "diagnosis"]).groups.items()):
+        for group, indices in df_scans.groupby(["subject_id", "diagnosis"]).groups.items():
             
             # Get scans of current group
             scans = df_scans.loc[indices]

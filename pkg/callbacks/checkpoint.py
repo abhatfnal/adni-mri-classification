@@ -1,4 +1,6 @@
 import torch
+import os 
+
 from .callback import Callback
 
 class CheckpointManager(Callback):
@@ -17,6 +19,10 @@ class CheckpointManager(Callback):
     def _is_better(self, current, best):
         return (current < best) if self.mode == "min" else (current > best)
 
+    def on_fit_start(self, context):
+        # Create and set checkpoint save path
+        context["checkpoint_path"] = os.path.join(context["dir"], "model.ckpt")
+    
     def on_val_epoch_end(self, ctx):
         
         if self.monitor not in ctx["metrics"]:
@@ -27,9 +33,9 @@ class CheckpointManager(Callback):
         if self.best_metric is None or self._is_better(current, self.best_metric):
             self.best_metric = current
             self.patience_counter = 0
-            torch.save(ctx.model.state_dict(), self.save_path)
+            torch.save(ctx["model"].state_dict(), ctx["checkpoint_path"])
         else:
             self.patience_counter += 1
 
         if self.patience > 0 and self.patience_counter >= self.patience:
-            ctx.signals.should_stop = True
+            ctx["signals"]["early_stop"] = True

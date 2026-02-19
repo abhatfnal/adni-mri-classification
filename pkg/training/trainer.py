@@ -1,5 +1,6 @@
 
 import torch 
+from tqdm import tqdm
 
 class CallbacksList:
     def __init__(self, callbacks):
@@ -13,6 +14,7 @@ class CallbacksList:
             fn = getattr(cb, name, None)
             if fn is None:
                 continue
+            fn(*args, **kwargs)
 
     def on_fit_start(self, context):
         self._call("on_fit_start", context)
@@ -44,22 +46,47 @@ class CallbacksList:
     def on_val_epoch_end(self, context):
         self._call("on_val_epoch_end", context)
 
+    def on_test_start(self, context):
+        self._call("on_test_start", context) 
+
+    def on_test_batch_start(self, context):
+        self._call("on_test_batch_start", context)
+
+    def on_test_batch_end(self, context, out, batch, batch_idx):
+        self._call("on_test_batch_end", context, out, batch, batch_idx)
+    
+    def on_test_end(self, context):
+        self._call("on_test_end", context)
+
 
 class Trainer:
 
-    def __init__(self, task, datamodule, callbacks, max_epochs=100):
+    def __init__(self, model, optimizer, datamodule, callbacks, 
+                 max_epochs=100,  
+                 dir=None,
+                 automatic_optimization=True,
+                 accum_steps=1):
 
-        self.task = task
+        self.model = model
+        self.optimizer = optimizer
         self.datamodule = datamodule
         self.max_epochs = max_epochs
+        self.accum_steps = accum_steps
+        self.automatic_optimization = automatic_optimization
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Move model to device
+        self.model = self.model.to(self.device)
+
         # Create context
-        self.ctx = { "model":task.model,
-                     "optimizer":task.optimizer,
-                         "signals":{ 
-                             "early_stop":False
-                        } 
+        self.ctx = { 
+                     "model":self.model,
+                     "optimizer":self.optimizer,
+                     "metrics":{},
+                     "signals":{ 
+                         "early_stop":False
+                      },
+                     "dir":dir, 
                     }
 
         # Create callbacks list
@@ -69,27 +96,58 @@ class Trainer:
 
         self.cb.on_fit_start(self.ctx)
 
-        for epoch in range(self.epochs):
+        for epoch in range(1,self.max_epochs+1):
 
             # Stop if early stop is signalled
             if self.ctx["signals"]["early_stop"]:
                 break 
 
-            # Train 
+            print(f"Epoch {epoch}")
+
+            # Train
+            self.model.train()
             self.cb.on_train_epoch_start(self.ctx)
             self.train_epoch(epoch)
             self.cb.on_train_epoch_end(self.ctx)
 
             # Validation
-            self.cb.on_val_epoch_start(self.ctx)
-            self.validate_epoch(epoch)
-            self.cb.on_val_epoch_end(self.ctx)
+            self.model.eval()
+            with torch.no_grad():
+                self.cb.on_val_epoch_start(self.ctx)
+                self.validate_epoch(epoch)
+                self.cb.on_val_epoch_end(self.ctx)
             
         self.cb.on_fit_end(self.ctx)
 
+    def test(self):
+        
+        # Test
+        self.model.eval()
+        with torch.no_grad():
+
+            self.cb.on_test_start(self.ctx)
+
+            for i, batch in enumerate(self.datamodule.test_dataloader()):
+
+                # Move tensors to device
+                batch = (batch[0].to(self.device), batch[1].to(self.device))
+
+                self.cb.on_test_batch_start(self.ctx)
+                out = self.ctx["model"].test_batch(batch, i)
+                self.cb.on_test_batch_end(self.ctx, out, batch, i)
+
+            self.cb.on_test_end(self.ctx)
+
     def train_epoch(self, epoch):
         
+        # Gradient accumulation steps
+        k = self.accum_steps
+
+        # Train loader
         train_loader = self.datamodule.train_dataloader(epoch)
+
+        if self.automatic_optimization:
+            self.optimizer.zero_grad()
 
         for i, batch in enumerate(train_loader):
 
@@ -97,19 +155,31 @@ class Trainer:
             batch = (batch[0].to(self.device), batch[1].to(self.device))
 
             self.cb.on_train_batch_start(self.ctx)
-            out = self.task.train_batch(batch)
-            self.cb.on_train_batch_end(self.ctx, out, batch, i)
+            loss, step_out = self.model.train_batch(batch, i)
+
+            if self.automatic_optimization:
+                (loss/k).backward()
+
+            self.cb.on_train_batch_end(self.ctx, step_out, batch, i)
+
+            if self.automatic_optimization and (i+1)%k == 0:
+                # Gradient clipping ?
+                #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+            
+        if self.automatic_optimization and (i+1)%k != 0:
+            self.optimizer.step()
 
     def validate_epoch(self, epoch):
 
-        val_loader = self.datamodule.val_dataloader(epoch)
+        val_loader = self.datamodule.val_dataloader()
 
         for i, batch in enumerate(val_loader):
 
             # Move tensors to device
             batch = (batch[0].to(self.device), batch[1].to(self.device))
-            
-            self.cb.on_val_batch_start(self.ctx)
-            out = self.task.validate_batch(batch)
-            self.cb.on_val_batch_end(self.ctx, out, batch, i)
 
+            self.cb.on_val_batch_start(self.ctx)
+            step_out = self.model.validate_batch(batch, i)
+            self.cb.on_val_batch_end(self.ctx, step_out, batch, i)

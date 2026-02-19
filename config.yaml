@@ -1,0 +1,61 @@
+datamodule:
+  class: pkg.data.datamodules.ADNIDataModule
+  args:
+    data:
+      data_dir: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/data/
+      scan_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/dataset_multimodal.csv
+      diagnostic_csv: /project/aereditato/cestari/adni-mri-classification/data/preprocessing_multimodal/csv/DXSUM_02Feb2026.csv
+      diagnosis: [1,2,3]
+      tolerance: 180
+      modalities:
+        MRI: ["MRI-T1-3T","MRI-T1-1.5T"]
+    split:
+      mode: kfold
+      seed: 42
+      folds: 5
+      test_size: 0.1
+      val_size: 0.2
+    loader:
+      batch_size: 16
+      weighted_sampling: false
+    transform: []
+
+model:
+  class: pkg.models.model_resnet18.ResNet18
+  args:
+    initial_filters: 8
+    dropout: 0.3
+    num_classes: 3
+
+optimizer:
+  name: AdamW
+  params:
+    lr: 0.0001
+    weight_decay: 0.01
+
+criterion:
+  name: CrossEntropyLoss
+  weights: auto
+  params: {}
+    
+trainer:
+  max_epochs: 50
+  accum_steps: 8  # Effective batch size: 16*8 = 128
+
+callbacks:
+  - class: pkg.callbacks.metrics.Metrics
+    args: {}
+
+  - class: pkg.callbacks.checkpoint.CheckpointManager
+    args: 
+      monitor: val/loss
+      mode: min 
+      patience: 10
+
+  - class: pkg.callbacks.scheduler.SchedulerPolicy
+    args: 
+      name: ReduceLROnPlateau
+      params: {}
+
+  - class: pkg.callbacks.test_report.TestReport
+    args: {}

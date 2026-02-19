@@ -11,7 +11,6 @@ from pkg.utils.multimodality import create_multimodal_dataframe
 
 from tqdm import tqdm
 
-
 class ADNIDataset(Dataset):
     
     def __init__(self,
@@ -69,7 +68,7 @@ class ADNIDataset(Dataset):
 
         # Add file paths
         paths = []
-        for index, row in tqdm(df_scan.iterrows()):
+        for index, row in df_scan.iterrows():
 
             id = row["image_id"]
             allowed_filenames = ['clean_w_masked_m' + id + '.nii', 
@@ -114,7 +113,7 @@ class ADNIDataset(Dataset):
 
         for mode in sorted(list(self.modalities.keys())):
             
-            if row[mode] is None:
+            if not isinstance(row[mode], str):
                 scans.append(None)
                 continue
 
@@ -160,6 +159,19 @@ class TransformDataset(Dataset):
             
             return x, y
         
+class DummyDataset(Dataset):
+
+    def __init__(self, *args, **kwargs):
+        pass 
+
+    def setup(self):
+        pass 
+
+    def __len__(self):
+        return 100
+
+    def __getitem__(self, index):
+        return 1,1
         
 # class ADNIDataset2(Dataset):
 #     """
