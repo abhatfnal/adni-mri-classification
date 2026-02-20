@@ -8,7 +8,8 @@ datamodule:
       diagnosis: [1,2,3]
       tolerance: 180
       modalities:
-        MRI: ["MRI-T1-3T","MRI-T1-1.5T"]
+        MRI: ["MRI-T1-3T"]
+        PET: ["PET-FDG"]
     split:
       mode: kfold
       seed: 42
@@ -18,7 +19,17 @@ datamodule:
     loader:
       batch_size: 16
       weighted_sampling: false
-    transform: []
+      shuffle: true
+    transform:
+      - random_flip:
+          p: 0.5
+      - random_affine:
+          p: 0.5
+          degrees: 5
+          translation: 5
+      - random_noise:
+          p: 0.2
+          std: [0, 0.1]
 
 model:
   class: pkg.models.model_resnet18.ResNet18
@@ -50,7 +61,7 @@ callbacks:
     args: 
       monitor: val/loss
       mode: min 
-      patience: 10
+      patience: 5
 
   - class: pkg.callbacks.scheduler.SchedulerPolicy
     args: 

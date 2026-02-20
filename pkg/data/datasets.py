@@ -18,20 +18,19 @@ class ADNIDataset(Dataset):
                  scan_csv, 
                  diagnostic_csv, 
                  modalities={
-                     "MRI":["MRI-T1-3T", "MRI-T1-1.5T"],
+                     "MRI":["MRI-T1-3T"],
                      "PET":["PET-FDG"] }, 
                  diagnosis=[1,2,3], 
                  tolerance=180,
                  verbose=2):
     
-        self.data_dir =data_dir
+        self.data_dir = data_dir
         self.scan_csv = scan_csv
         self.diagnostic_csv = diagnostic_csv
         self.modalities = modalities 
         self.diagnosis = diagnosis
         self.tolerance = tolerance
         self.verbose = verbose
-
         
     def setup(self):
 
@@ -108,27 +107,30 @@ class ADNIDataset(Dataset):
     
     def __getitem__(self, index):
 
-        scans = []
         row = self.df_multimodal.loc[index]
+
+        scans = []
+        mask = []
 
         for mode in sorted(list(self.modalities.keys())):
             
             if not isinstance(row[mode], str):
-                scans.append(None)
+                scans.append(torch.zeros((1, 91, 109, 91)))     # Pad with zeros
+                mask.append(0)                                  # Scan is missing
                 continue
 
             path = self.df_scan.loc[ self.df_scan["image_id"] == row[mode], "path"].tolist()[0]
             vol = nib.load(path).get_fdata().astype(np.float32)         
             img = torch.from_numpy(vol).unsqueeze(0)  # Add channel dimension (1,D,H,W)
 
-            #TODO: Add augmentation transforms !
-
             scans.append(img)
+            mask.append(1)
     
-        X = tuple(scans) if len(self.modalities) > 1 else scans[0]
+        X = torch.stack(scans) if len(self.modalities) > 1 else scans[0]
         y = torch.tensor(int(row['label']), dtype=torch.long)
+        mask = torch.tensor(mask)
 
-        return X,y
+        return {"X":X, "y":y, "mask":mask}
 
     def groups(self):
         return self.df_multimodal["subject_id"].astype(str).tolist()
@@ -153,11 +155,27 @@ class TransformDataset(Dataset):
         return len(self.base)
     
     def __getitem__(self, idx):
-        x, y = self.base[idx]
-        if self.transform is not None:
-            x = self.transform(x)
+
+        sample = self.base[idx]
+
+        # Get tensor 
+        X = sample["X"]
+
+        # If it's single modality, apply transform directly 
+        if len(X.shape) == 4: # (C,W,D,H)
+            X = self.transform(X)
+
+        elif len(X.shape) == 5: # (M,C,W,D,H)
+            n_modalities = X.shape[0]
+
+            # Temporarily flatten M and C dimensions, apply transform, then unflatten back
+            X = self.transform(X.flatten(0,1)).unflatten(0, (n_modalities, -1))
+
+        else:
+            raise ValueError("Invalid sample shape")
             
-            return x, y
+        sample["X"] = X
+        return sample
         
 class DummyDataset(Dataset):
 
@@ -172,55 +190,4 @@ class DummyDataset(Dataset):
 
     def __getitem__(self, index):
         return 1,1
-        
-# class ADNIDataset2(Dataset):
-#     """
-#     ADNI dataset class
-#     """
-        
-#     def __init__(self, csv_file, classes=[1,2,3], transform=None):
-        
-#         self.transform = transform
-        
-#         # Read csv
-#         self.data = pd.read_csv(csv_file)
-        
-#         # Only keep rows with existing files
-#         self.data = self.data[ self.data['filepath'].apply( lambda x : os.path.exists(x))]
-        
-#         # Only keep requested diagnoses
-#         self.data = self.data[self.data['diagnosis'].isin(classes)].copy()
-
-#         # Map them to 0, ... , |classes|
-#         diag_to_label = {diag: i for i, diag in enumerate(classes)}
-
-#         self.data['label'] = self.data['diagnosis'].map(diag_to_label)
-
-#     def __len__(self):
-#         return len(self.data)
-
-#     def __getitem__(self, idx):
-#         row = self.data.iloc[idx]
-#         vol = nib.load(row['filepath']).get_fdata().astype(np.float32)
-   
-#         img = torch.from_numpy(vol).unsqueeze(0)  # → (1,D,H,W)
-
-#         if self.transform:
-#             img = self.transform(img)  # Tensor→Tensor on same device
-
-#         label = torch.tensor(int(row['label']), dtype=torch.long)
-#         return img, label
-    
-#     def labels(self):
-#         return self.data['label'].astype(int).tolist()
-    
-#     def groups(self):
-#         return self.data['ptid'].astype(str).tolist()
-    
-if __name__ == "__main__":
-    
-    dataset = ADNIDataset(
-        csv_file="/project/aereditato/cestari/adni-mri-classification/data/preprocessing_mri_pet/datasets/dataset_unimodal_mri_trainval.csv")
-    
-    index = 20
-    print(dataset[index][0].shape)
+ 

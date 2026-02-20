@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class SAM3d(nn.Module):
     """
@@ -20,3 +21,26 @@ class SAM3d(nn.Module):
         m = torch.sigmoid(self.conv(m))
         
         return m*x
+
+
+class ResidualBlock(nn.Module):
+    
+    def __init__(self, channel_in, channel_out, kernel_size=3, stride=1, sam=False):
+        super().__init__()
+
+        self.residual = nn.Sequential(
+            nn.Conv3d(channel_in, channel_out, kernel_size, stride=stride, padding=kernel_size//2),
+            nn.GroupNorm(8, channel_out),
+            nn.ReLU(),
+            nn.Conv3d(channel_out, channel_out, kernel_size, padding=kernel_size//2),
+            nn.GroupNorm(8, channel_out),
+            SAM3d() if sam else nn.Identity(),
+        )
+        
+        self.skip1 = nn.Conv3d(channel_in, channel_out, 1, stride=stride, padding=0)
+        
+    def forward(self, x):
+        
+        x = F.relu(self.residual(x) + self.skip1(x))
+        
+        return x

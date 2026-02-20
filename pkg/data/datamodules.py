@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader, Subset
 from .augmentation import build_augmentation
 from .loaders import build_loader
 
+import torch
 import numpy as np 
 import pandas as pd
 import os
@@ -65,8 +66,12 @@ class ADNIDataModule(DataModule):
 
     def setup(self):
 
+        transform = None
+        if len(self.transform_cfg) > 0:
+            transform = build_augmentation(self.transform_cfg)
+
         # Create dataset
-        self.ds = ADNIDataset(**self.data_cfg)
+        self.ds = ADNIDataset(**self.data_cfg, transform=transform)
 
         # Set it up
         self.ds.setup()
@@ -107,7 +112,7 @@ class ADNIDataModule(DataModule):
 
         # Loaders 
         self._train_loader = build_loader(train_ds, labels=self.train_labels, **self.loader_cfg)
-        self._val_loader = build_loader(val_ds)
+        self._val_loader = build_loader(val_ds, batch_size=2)
 
     def n_folds(self):
         return len(self.folds)
@@ -126,14 +131,16 @@ class ADNIDataModule(DataModule):
         # Dump df_scan and df_multimodal from dataset
         self.ds.df_multimodal.to_csv(os.path.join(dir, "samples.csv"))
 
-        indices = {
-            "test_idx": self._test_idx, 
-            "folds": {
-                i:self.folds[i] for i in range(len(self.folds))
-            }}
+        indices = {"test_idx": [int(e) for e in self._test_idx] }
+
+        for i, fold in enumerate(self.folds):
+            train_idxs = [int(e) for e in fold[0]]
+            val_idxs = [int(e) for e in fold[1]]
+
+            indices[f"fold_{i}"] = {"train_idx":train_idxs, "val_idx":val_idxs}
 
         # Dump indices
-        with open(os.path.join(dir, "indices.json")) as f:
+        with open(os.path.join(dir, "indices.json"), "w") as f:
             f.write(json.dumps(indices))
 
     def info(self):

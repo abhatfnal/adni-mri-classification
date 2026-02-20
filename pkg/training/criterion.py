@@ -11,7 +11,7 @@ def build_criterion(cfg, train_labels=None, device="cpu"):
 
     if name == "CrossEntropyLoss":
 
-        if "params" in cfg and "weights" in cfg["params"]:
+        if "weights" in cfg:
             
             if cfg["weights"] == "auto":
 
